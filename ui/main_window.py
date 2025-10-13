@@ -1,19 +1,21 @@
 # ui/main_window.py
 from collections import defaultdict
 import os
-from .font_utils import load_lato_family
+
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QComboBox, QMessageBox, QSizePolicy,
     QFrame, QScrollArea, QListView
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont, QFontDatabase
+from PyQt6.QtGui import QFont
 
 from core.io_csv import load_events_csv
 from .styles import STYLE_LIGHT
 from .timeline_canvas import TimelineCanvas
 from .finance_chart import FinanceChart
+from .compound_interest import CompoundInterestWidget
+from .font_utils import load_lato_family
 
 
 # ------ Chip layout constants ------
@@ -32,11 +34,11 @@ def make_chip(inner: QWidget) -> QFrame:
             border-radius: {CHIP_RADIUS}px;
         }}
     """)
-    lay_chip = QHBoxLayout(chip)
-    lay_chip.setContentsMargins(12, 6, 12, 6)
-    lay_chip.setSpacing(8)
-    lay_chip.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-    lay_chip.addWidget(inner, 0, Qt.AlignmentFlag.AlignVCenter)
+    lay = QHBoxLayout(chip)
+    lay.setContentsMargins(12, 6, 12, 6)
+    lay.setSpacing(8)
+    lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+    lay.addWidget(inner, 0, Qt.AlignmentFlag.AlignVCenter)
     chip.setMinimumHeight(CHIP_HEIGHT)
     chip.setMaximumHeight(CHIP_HEIGHT)
     return chip
@@ -64,7 +66,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Timeline App — Qt Canvas (no HTML)")
-        self.resize(1200, 900)
+        self.resize(1200, 980)
 
         # === Font Lato (se disponibile) ===
         self.font_family, _ = load_lato_family(fallback_family="Arial")
@@ -134,7 +136,7 @@ class MainWindow(QMainWindow):
                 padding: 6px 10px;
             }}
 
-            /* ===== SCROLLBAR VERTICALE MODERNA (solo per l'area centrale) ===== */
+            /* ===== SCROLLBAR VERTICALE (solo area centrale) ===== */
             QScrollArea#MainScroll QScrollBar:vertical {{
                 background: transparent;
                 width: 12px;
@@ -142,20 +144,16 @@ class MainWindow(QMainWindow):
                 border: none;
             }}
             QScrollArea#MainScroll QScrollBar::handle:vertical {{
-                background: #cbd5e1;      /* slate-300 */
+                background: #cbd5e1;  /* slate-300 */
                 min-height: 40px;
                 border-radius: 6px;
             }}
             QScrollArea#MainScroll QScrollBar::handle:vertical:hover  {{ background: #b6c2cf; }}
             QScrollArea#MainScroll QScrollBar::handle:vertical:pressed{{ background: #94a3b8; }}
             QScrollArea#MainScroll QScrollBar::add-line:vertical,
-            QScrollArea#MainScroll QScrollBar::sub-line:vertical {{
-                height: 0; border: none; background: transparent;
-            }}
+            QScrollArea#MainScroll QScrollBar::sub-line:vertical {{ height: 0; border: none; background: transparent; }}
             QScrollArea#MainScroll QScrollBar::add-page:vertical,
-            QScrollArea#MainScroll QScrollBar::sub-page:vertical {{
-                background: transparent;
-            }}
+            QScrollArea#MainScroll QScrollBar::sub-page:vertical {{ background: transparent; }}
         """)
 
         # ===== Stato dati =====
@@ -189,7 +187,7 @@ class MainWindow(QMainWindow):
         self.person_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.person_combo.setMinimumContentsLength(18)
         self.person_combo.setToolTip("Seleziona la persona")
-        self.person_combo.setView(QListView())  # popup personalizzabile (rounded)
+        self.person_combo.setView(QListView())  # popup arrotondato
         pw.addWidget(lbl_person, 0, Qt.AlignmentFlag.AlignVCenter)
         pw.addWidget(self.person_combo, 0, Qt.AlignmentFlag.AlignVCenter)
         chip_person = make_chip(person_wrap)
@@ -204,19 +202,25 @@ class MainWindow(QMainWindow):
         row.addWidget(chip_status, 1)
         row.addWidget(chip_person)
 
-        # ---------- Timeline (alta) ----------
+        # ---------- Timeline ----------
         self.canvas = TimelineCanvas()
         self.canvas.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.canvas.setMinimumHeight(520)  # aumenta per maggiore leggibilità
+        self.canvas.setMinimumHeight(520)
         canvas_card = make_content_card(self.canvas, radius=16)
 
-        # ---------- Finance Chart (alto) ----------
+        # ---------- Finance Chart ----------
         self.finance_chart = FinanceChart()
         self.finance_chart.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.finance_chart.setMinimumHeight(520)
         finance_card = make_content_card(self.finance_chart, radius=16)
 
-        # (opzionale) icone categoria
+        # ---------- Compound Interest (terzo widget, PIÙ GRANDE) ----------
+        self.compound = CompoundInterestWidget()
+        self.compound.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.compound.setMinimumHeight(950)  # più grande degli altri due
+        compound_card = make_content_card(self.compound, radius=16)
+
+        # (opzionale) icone categoria per la timeline
         icon_base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "icons")
         self.canvas.set_icon_map({
             "famiglia":  os.path.join(icon_base, "famiglia.png"),
@@ -238,9 +242,10 @@ class MainWindow(QMainWindow):
         root.addWidget(title)
         root.addWidget(canvas_card)
         root.addWidget(finance_card)
+        root.addWidget(compound_card)
 
         scroll = QScrollArea()
-        scroll.setObjectName("MainScroll")  # per stilizzare solo questa scrollbar
+        scroll.setObjectName("MainScroll")  # per lo stile della scrollbar
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -269,6 +274,8 @@ class MainWindow(QMainWindow):
             self.person_combo.setEnabled(False)
             self.status_badge.setText("Caricato: 0 persone")
             self.finance_chart.set_event_dates([])
+            self.compound.set_start_date(None)
+            self.compound.set_event_points([])
             return
 
         per_persona = defaultdict(int)
@@ -284,6 +291,7 @@ class MainWindow(QMainWindow):
 
         self.person_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.person_combo.setMinimumContentsLength(max(18, max(len(p) for p in persone)))
+        # tooltip con numero eventi
         for i, p in enumerate(persone):
             self.person_combo.setItemData(i, f"{p} — {per_persona[p]} eventi", Qt.ItemDataRole.ToolTipRole)
 
@@ -310,12 +318,14 @@ class MainWindow(QMainWindow):
             self.status_badge.setText("Caricato: 0 eventi per questa persona")
             self.canvas.set_events([])
             self.finance_chart.set_event_dates([])
+            self.compound.set_start_date(None)
+            self.compound.set_event_points([])
             return
 
         # Timeline
         self.canvas.set_events(sub)
         # Finance chart
         self.finance_chart.set_event_dates([e.dt for e in sub])
-
-    # ===== Font helpers =====
-    
+        # Compound interest: prima data + (data, titolo) per marker/etichette
+        self.compound.set_start_date(sub[0].dt)
+        self.compound.set_event_points([(e.dt, e.titolo or "") for e in sub])
