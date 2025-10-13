@@ -1,34 +1,47 @@
 # ui/finance_chart.py
 from __future__ import annotations
 
-from typing import Iterable, Dict
+from typing import Iterable, Dict, List, Tuple
 from datetime import datetime, timedelta
 
 from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSizePolicy, QScrollArea
 from PyQt6.QtCore import Qt, QEvent
 import pandas as pd
+import numpy as np
 import yfinance as yf
+import matplotlib.dates as mdates
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
+from core.forecast import forecast_from_history
 
-# Indici globali (Yahoo Finance tickers)
+# Nomi → ticker Yahoo Finance
 DEFAULT_INDEXES: Dict[str, str] = {
-    "S&P 500":      "^GSPC",
-    "Euro Stoxx 50":"^STOXX50E",
-    "FTSE 100":     "^FTSE",
-    "Nikkei 225":   "^N225",
-    "Hang Seng":    "^HSI",
+    "S&P 500":       "^GSPC",
+    "Euro Stoxx 50": "^STOXX50E",
+    "FTSE 100":      "^FTSE",
+    "Nikkei 225":    "^N225",
+    "Hang Seng":     "^HSI",
 }
+
+# Colori FISSI per coerenza (linea piena, tratteggio e marker)
+INDEX_COLORS: Dict[str, str] = {
+    "S&P 500":       "#1f77b4",  # blue
+    "Euro Stoxx 50": "#2ca02c",  # green
+    "FTSE 100":      "#9467bd",  # purple
+    "Nikkei 225":    "#ff7f0e",  # orange
+    "Hang Seng":     "#7f7f7f",  # gray
+}
+
 
 class FinanceChart(QWidget):
     """
-    Grafico delle variazioni percentuali normalizzate a 0% alla prima data.
-    - Usa yfinance per scaricare gli Adj Close degli indici.
-    - Allinea i valori alle date degli eventi (ultimo prezzo disponibile <= data evento).
-    - Scroll del trackpad reindirizzato alla QScrollArea madre (zoom solo con CTRL).
-    - Linea tratteggiata per i tratti futuri (dall’ultimo punto <= oggi in poi).
+    Grafico delle variazioni % (base = prima data evento).
+    - Dati storici via yfinance.
+    - Colori consistenti per ogni indice.
+    - Tooltip sui pallini con la % a quella data.
+    - Parte FUTURA previsionale in tratteggio (CAGR 5 anni dalla storia recente).
     """
 
     def __init__(self, parent=None, indexes: Dict[str, str] | None = None):
@@ -57,17 +70,19 @@ class FinanceChart(QWidget):
         self.status.setStyleSheet("color:#6b7280; font-size:12px;")
         lay.addWidget(self.status)
 
-    # ---------- Event filter: rerouting dello scroll alla QScrollArea ----------
+        # stato hover
+        self._annot = None
+        self._hover_cid = self.canvas.mpl_connect("motion_notify_event", self._on_hover)
+        self._scatters: List[Tuple] = []  # [(PathCollection, dict(meta))]
+
+    # ---------- Scroll a due dita: inoltra alla QScrollArea ----------
     def eventFilter(self, obj, event):
         if obj is self.canvas and event.type() == QEvent.Type.Wheel:
-            # CTRL = lascia zoom/pan a Matplotlib
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                return False
+                return False  # (se vuoi abilitare zoom mpl con CTRL)
             scroll = self._find_scroll_area()
             if scroll is not None:
-                dy = event.pixelDelta().y()
-                if dy == 0:
-                    dy = event.angleDelta().y() // 2
+                dy = event.pixelDelta().y() or (event.angleDelta().y() // 2)
                 bar = scroll.verticalScrollBar()
                 bar.setValue(bar.value() - int(dy))
                 return True
@@ -81,27 +96,35 @@ class FinanceChart(QWidget):
 
     # ---------- API ----------
     def set_event_dates(self, dates: Iterable[datetime]) -> None:
-        """Aggiorna il grafico in base alla lista di date eventi."""
+        """
+        Aggiorna il grafico per le date evento (datetime o date).
+        """
         self.fig.clear()
+        self._scatters.clear()
         ax = self.fig.add_subplot(111)
 
-        # Normalizza/ordina date (array di date senza orario)
+        # 1) Prepara le date evento
         ds = sorted({d.date() if isinstance(d, datetime) else d for d in dates})
         if not ds:
             self.status.setText("Nessuna data evento disponibile.")
             self.canvas.draw_idle()
             return
 
-        start = ds[0] - timedelta(days=7)
-        end   = ds[-1] + timedelta(days=7)
+        event_idx = pd.to_datetime(ds)
+        today_ts = pd.Timestamp(datetime.now().date())
+        past_idx = event_idx[event_idx <= today_ts]
+        future_idx = event_idx[event_idx > today_ts]
 
-        # Scarica prezzi (Adj Close)
+        # 2) Scarica storico (sufficiente per leggere i prezzi a tutte le date)
+        start = min(ds[0] - timedelta(days=7), (today_ts - pd.DateOffset(years=10)).date())
+        end   = max(ds[-1], today_ts.date()) + timedelta(days=7)
+
         try:
             tickers = list(self.indexes.values())
             data = yf.download(
                 tickers=tickers,
                 start=start.isoformat(),
-                end=(end + timedelta(days=1)).isoformat(),  # end esclusiva
+                end=(end + timedelta(days=1)).isoformat(),  # end esclusa
                 auto_adjust=False,
                 progress=False,
                 group_by="ticker",
@@ -117,7 +140,7 @@ class FinanceChart(QWidget):
             self.canvas.draw_idle()
             return
 
-        # Estrai Adj Close in DataFrame colonne = nomi umani
+        # 3) DataFrame prezzi (Adj Close) con colonne = nomi umani
         try:
             adj = {}
             for name, ticker in self.indexes.items():
@@ -137,56 +160,63 @@ class FinanceChart(QWidget):
                 self.canvas.draw_idle()
                 return
 
-        # Forward-fill e selezione dei punti sulle date evento (ultimo <= data evento)
         prices = prices.ffill()
-        event_idx = pd.to_datetime(ds)
-        aligned = prices.reindex(prices.index.union(event_idx)).ffill().loc[event_idx]
 
-        # Normalizza alla prima data (0% = base)
-        base = aligned.iloc[0]
-        norm = (aligned / base - 1.0) * 100.0  # DataFrame, index = event_idx
+        # 4) Base di normalizzazione = prezzo alla prima data evento (per ciascun indice)
+        base_row = prices.reindex(prices.index.union(event_idx)).ffill().loc[event_idx[0]]
 
-        # Cutoff tra passato e futuro (oggi incluso = passato)
-        today_ts = pd.Timestamp(datetime.now().date())
-        past_idx = event_idx[event_idx <= today_ts]
-        future_idx = event_idx[event_idx > today_ts]
+        # 5) Prepara serie per ogni indice: passato (reale) + futuro (previsione CAGR)
+        for name in prices.columns:
+            color = INDEX_COLORS.get(name, None)
+            label_used = False
 
-        # Disegno per ogni indice: solido nel passato, tratteggiato nel futuro
-        for col in norm.columns:
-            label_added = False
-
-            # Segmento passato
+            # --- passato (pieno) ---
             if len(past_idx) > 0:
-                y_past = norm.loc[past_idx, col].values.astype(float)
-                ax.plot(past_idx, y_past, linewidth=2, label=col)
-                label_added = True
+                past_series = prices.reindex(prices.index.union(past_idx)).ffill().loc[past_idx, name]
+                y_past = (past_series / base_row[name] - 1.0) * 100.0
+                ax.plot(past_idx, y_past.values.astype(float), linewidth=2, label=name, color=color)
+                label_used = True
+            else:
+                y_past = pd.Series(dtype=float)
 
-            # Segmento futuro (dall'ultimo passato → futuri), tratteggiato
+            # --- futuro (tratteggio) con forecast CAGR 5 anni ---
             if len(future_idx) > 0:
-                if len(past_idx) > 0:
-                    start_x = past_idx[-1]
-                    start_y = float(norm.loc[start_x, col])
+                hist_for_model = prices[name].dropna()
+                y_future_prices = forecast_from_history(hist_for_model, future_idx, lookback_years=5)
+                y_future = (y_future_prices / base_row[name] - 1.0) * 100.0
+
+                # Collegamento dal passato all'inizio del futuro
+                if len(y_past) > 0:
+                    x_dash = [past_idx[-1]] + list(future_idx)
+                    y_dash = [float(y_past.iloc[-1])] + list(y_future.values.astype(float))
                 else:
-                    # nessun punto passato: tratto tutto in futuro (dalla prima data)
-                    start_x = future_idx[0]
-                    start_y = float(norm.loc[start_x, col])
+                    x_dash = list(future_idx)
+                    y_dash = list(y_future.values.astype(float))
 
-                x_dashed = [start_x] + list(future_idx)
-                y_dashed = [start_y] + list(norm.loc[future_idx, col].values.astype(float))
+                ax.plot(x_dash, y_dash, linewidth=2, linestyle="--",
+                        label=(name if not label_used else "_nolegend_"), color=color)
 
-                ax.plot(
-                    x_dashed, y_dashed,
-                    linewidth=2,
-                    linestyle="--",
-                    label=(col if not label_added else "_nolegend_")  # evita duplicati in legenda
-                )
+            # --- scatter su TUTTI gli eventi (passati+futuri) con tooltip % ---
+            y_all = []
+            for d in event_idx:
+                if len(past_idx) > 0 and d in past_idx:
+                    y_all.append(float((prices.reindex(prices.index.union([d])).ffill().loc[d, name] / base_row[name] - 1.0) * 100.0))
+                else:
+                    # usa la previsione
+                    pred_val = None
+                    if len(future_idx) > 0 and d in future_idx:
+                        pred_val = y_future_prices.loc[d] if d in y_future_prices.index else None
+                    if pred_val is not None:
+                        y_all.append(float((pred_val / base_row[name] - 1.0) * 100.0))
+                    else:
+                        # fallback: ultimo passato disponibile
+                        y_all.append(float(y_past.iloc[-1]) if len(y_past) > 0 else 0.0)
 
-            # Marker sui punti (tutti)
-            y_all = norm[col].values.astype(float)
-            ax.scatter(event_idx, y_all, s=20)
+            sc = ax.scatter(event_idx, y_all, s=30, color=color, edgecolor="#0f172a", linewidths=0.5)
+            self._scatters.append((sc, {"name": name, "x": event_idx.to_pydatetime(), "y": y_all}))
 
-        # Asse, griglia, labels
-        ax.axhline(0, linewidth=1, linestyle="--", alpha=0.6)
+        # 6) dettagli grafici
+        ax.axhline(0, linewidth=1, linestyle="--", alpha=0.5, color="#94a3b8")
         ax.grid(True, which="major", alpha=0.25)
         ax.set_ylabel("Variazione % da prima data")
         ax.set_xlabel("Date evento")
@@ -196,5 +226,39 @@ class FinanceChart(QWidget):
         self.canvas.draw_idle()
 
         self.status.setText(
-            f"Intervallo: {ds[0].isoformat()} — {ds[-1].isoformat()}  |  Indici: {', '.join(self.indexes.keys())}"
+            f"Intervallo: {ds[0].isoformat()} — {ds[-1].isoformat()} | "
+            f"Indici: {', '.join(self.indexes.keys())} | "
+            f"Futuro: previsione CAGR (5 anni) tratteggiata"
         )
+
+        # annotazione condivisa per hover
+        ax = self.fig.axes[0]
+        self._annot = ax.annotate(
+            "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
+            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
+            fontsize=9
+        )
+        self._annot.set_visible(False)
+
+    # ---------- Hover sui marker: mostra la % ----------
+    def _on_hover(self, event):
+        if self._annot is None or event.inaxes is None:
+            return
+        shown = False
+        for sc, meta in self._scatters:
+            contains, ind = sc.contains(event)
+            if not contains or not ind.get("ind"):
+                continue
+            i = ind["ind"][0]
+            dt = meta["x"][i]
+            y  = float(meta["y"][i])
+            self._annot.xy = (mdates.date2num(dt), y)
+            self._annot.set_text(f"{meta['name']}\n{dt:%Y-%m-%d}  •  {y:.1f}%")
+            self._annot.set_visible(True)
+            self.canvas.draw_idle()
+            shown = True
+            break
+
+        if not shown and self._annot.get_visible():
+            self._annot.set_visible(False)
+            self.canvas.draw_idle()
