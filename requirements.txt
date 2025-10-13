@@ -1,8 +1,38 @@
+# Core GUI
 PyQt6
-PyQt6-WebEngine
+
+# Data management
 pandas
-plotly
-pyinstaller
-kaleido
+numpy
+
+# Visualization
 matplotlib
+pillow
+contourpy
+cycler
+fonttools
+kiwisolver
+pyparsing
+
+# Finance data
 yfinance
+curl_cffi
+beautifulsoup4
+frozendict
+multitasking
+peewee
+protobuf
+websockets
+
+# Utility dependencies (used by yfinance/pandas)
+requests
+python-dateutil
+pytz
+tzdata
+six
+typing_extensions
+packaging
+certifi
+charset-normalizer
+idna
+urllib3
