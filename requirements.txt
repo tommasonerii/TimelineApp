@@ -1,0 +1,6 @@
+PyQt6
+PyQt6-WebEngine
+pandas
+plotly
+pyinstaller
+kaleido

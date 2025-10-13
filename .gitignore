@@ -1,0 +1,30 @@
+﻿# Python
+*__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+.env
+.venv/
+venv/
+
+# IDE/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build/packaging
+build/
+dist/
+*.spec
+
+# Cache
+*.log
+.cache/
+.mypy_cache/
+.pytype/
+.ipynb_checkpoints/
+
+# Dati locali vari
+*.csv
