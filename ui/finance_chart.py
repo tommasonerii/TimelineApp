@@ -14,9 +14,9 @@ import matplotlib.dates as mdates
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
-from core.forecast import forecast_from_history
+from core.forecast import forecast_cagrx_from_yfinance
 
-# Nomi → ticker Yahoo Finance
+# Indici globali (Yahoo Finance tickers)
 DEFAULT_INDEXES: Dict[str, str] = {
     "S&P 500":       "^GSPC",
     "Euro Stoxx 50": "^STOXX50E",
@@ -25,7 +25,7 @@ DEFAULT_INDEXES: Dict[str, str] = {
     "Hang Seng":     "^HSI",
 }
 
-# Colori FISSI per coerenza (linea piena, tratteggio e marker)
+# Colori CONSISTENTI per ogni indice
 INDEX_COLORS: Dict[str, str] = {
     "S&P 500":       "#1f77b4",  # blue
     "Euro Stoxx 50": "#2ca02c",  # green
@@ -37,11 +37,11 @@ INDEX_COLORS: Dict[str, str] = {
 
 class FinanceChart(QWidget):
     """
-    Grafico delle variazioni % (base = prima data evento).
-    - Dati storici via yfinance.
-    - Colori consistenti per ogni indice.
-    - Tooltip sui pallini con la % a quella data.
-    - Parte FUTURA previsionale in tratteggio (CAGR 5 anni dalla storia recente).
+    Grafico delle variazioni % normalizzate alla prima data degli eventi.
+    - Storico via yfinance (Adj Close).
+    - Colori fissi per indice (consistenti).
+    - Tooltip su ogni PALLINO: mostra la variazione % a quella data.
+    - Futuro: previsione CAGR-X (proxy macro Yahoo) in linea tratteggiata.
     """
 
     def __init__(self, parent=None, indexes: Dict[str, str] | None = None):
@@ -54,7 +54,7 @@ class FinanceChart(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
 
-        self.title = QLabel("Andamento indici globali (variazione % dalla prima data)")
+        self.title = QLabel("Indici globali — variazione % dalla prima data (CAGR-X per il futuro)")
         self.title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.title.setStyleSheet("color:#111; font-weight:600; margin: 4px 0;")
         lay.addWidget(self.title)
@@ -62,7 +62,7 @@ class FinanceChart(QWidget):
         self.fig = Figure(figsize=(6, 2.8), dpi=100)
         self.canvas = FigureCanvas(self.fig)
         self.canvas.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.canvas.installEventFilter(self)  # per lo scroll
+        self.canvas.installEventFilter(self)  # scroll → QScrollArea
         lay.addWidget(self.canvas, stretch=1)
 
         self.status = QLabel("")
@@ -70,16 +70,16 @@ class FinanceChart(QWidget):
         self.status.setStyleSheet("color:#6b7280; font-size:12px;")
         lay.addWidget(self.status)
 
-        # stato hover
+        # hover state
         self._annot = None
         self._hover_cid = self.canvas.mpl_connect("motion_notify_event", self._on_hover)
         self._scatters: List[Tuple] = []  # [(PathCollection, dict(meta))]
 
-    # ---------- Scroll a due dita: inoltra alla QScrollArea ----------
+    # ---------- Rerouting scroll ----------
     def eventFilter(self, obj, event):
         if obj is self.canvas and event.type() == QEvent.Type.Wheel:
             if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
-                return False  # (se vuoi abilitare zoom mpl con CTRL)
+                return False
             scroll = self._find_scroll_area()
             if scroll is not None:
                 dy = event.pixelDelta().y() or (event.angleDelta().y() // 2)
@@ -96,14 +96,12 @@ class FinanceChart(QWidget):
 
     # ---------- API ----------
     def set_event_dates(self, dates: Iterable[datetime]) -> None:
-        """
-        Aggiorna il grafico per le date evento (datetime o date).
-        """
+        """Ridisegna in base alle date evento."""
         self.fig.clear()
         self._scatters.clear()
         ax = self.fig.add_subplot(111)
 
-        # 1) Prepara le date evento
+        # Date evento
         ds = sorted({d.date() if isinstance(d, datetime) else d for d in dates})
         if not ds:
             self.status.setText("Nessuna data evento disponibile.")
@@ -115,10 +113,11 @@ class FinanceChart(QWidget):
         past_idx = event_idx[event_idx <= today_ts]
         future_idx = event_idx[event_idx > today_ts]
 
-        # 2) Scarica storico (sufficiente per leggere i prezzi a tutte le date)
+        # Intervallo download storico
         start = min(ds[0] - timedelta(days=7), (today_ts - pd.DateOffset(years=10)).date())
         end   = max(ds[-1], today_ts.date()) + timedelta(days=7)
 
+        # Scarica prezzi
         try:
             tickers = list(self.indexes.values())
             data = yf.download(
@@ -140,7 +139,7 @@ class FinanceChart(QWidget):
             self.canvas.draw_idle()
             return
 
-        # 3) DataFrame prezzi (Adj Close) con colonne = nomi umani
+        # DataFrame prezzi (Adj Close) colonne = nomi umani
         try:
             adj = {}
             for name, ticker in self.indexes.items():
@@ -162,15 +161,15 @@ class FinanceChart(QWidget):
 
         prices = prices.ffill()
 
-        # 4) Base di normalizzazione = prezzo alla prima data evento (per ciascun indice)
+        # Base di normalizzazione = prezzo alla prima data evento
         base_row = prices.reindex(prices.index.union(event_idx)).ffill().loc[event_idx[0]]
 
-        # 5) Prepara serie per ogni indice: passato (reale) + futuro (previsione CAGR)
+        # Disegna per ciascun indice
         for name in prices.columns:
             color = INDEX_COLORS.get(name, None)
             label_used = False
 
-            # --- passato (pieno) ---
+            # passato (linea piena)
             if len(past_idx) > 0:
                 past_series = prices.reindex(prices.index.union(past_idx)).ffill().loc[past_idx, name]
                 y_past = (past_series / base_row[name] - 1.0) * 100.0
@@ -179,13 +178,12 @@ class FinanceChart(QWidget):
             else:
                 y_past = pd.Series(dtype=float)
 
-            # --- futuro (tratteggio) con forecast CAGR 5 anni ---
+            # futuro (CAGR-X) in tratteggio
             if len(future_idx) > 0:
                 hist_for_model = prices[name].dropna()
-                y_future_prices = forecast_from_history(hist_for_model, future_idx, lookback_years=5)
+                y_future_prices = forecast_cagrx_from_yfinance(hist_for_model, future_idx, lookback_years=5, macro_years=5)
                 y_future = (y_future_prices / base_row[name] - 1.0) * 100.0
 
-                # Collegamento dal passato all'inizio del futuro
                 if len(y_past) > 0:
                     x_dash = [past_idx[-1]] + list(future_idx)
                     y_dash = [float(y_past.iloc[-1])] + list(y_future.values.astype(float))
@@ -196,26 +194,24 @@ class FinanceChart(QWidget):
                 ax.plot(x_dash, y_dash, linewidth=2, linestyle="--",
                         label=(name if not label_used else "_nolegend_"), color=color)
 
-            # --- scatter su TUTTI gli eventi (passati+futuri) con tooltip % ---
+            # marker + tooltip su TUTTI gli eventi (passati + previsti)
             y_all = []
             for d in event_idx:
                 if len(past_idx) > 0 and d in past_idx:
-                    y_all.append(float((prices.reindex(prices.index.union([d])).ffill().loc[d, name] / base_row[name] - 1.0) * 100.0))
+                    val = prices.reindex(prices.index.union([d])).ffill().loc[d, name]
+                    y_all.append(float((val / base_row[name] - 1.0) * 100.0))
                 else:
-                    # usa la previsione
-                    pred_val = None
-                    if len(future_idx) > 0 and d in future_idx:
-                        pred_val = y_future_prices.loc[d] if d in y_future_prices.index else None
+                    # per futuro, usa la proiezione
+                    pred_val = y_future_prices.loc[d] if len(future_idx) > 0 and d in future_idx and d in y_future_prices.index else None
                     if pred_val is not None:
                         y_all.append(float((pred_val / base_row[name] - 1.0) * 100.0))
                     else:
-                        # fallback: ultimo passato disponibile
                         y_all.append(float(y_past.iloc[-1]) if len(y_past) > 0 else 0.0)
 
             sc = ax.scatter(event_idx, y_all, s=30, color=color, edgecolor="#0f172a", linewidths=0.5)
             self._scatters.append((sc, {"name": name, "x": event_idx.to_pydatetime(), "y": y_all}))
 
-        # 6) dettagli grafici
+        # look & feel
         ax.axhline(0, linewidth=1, linestyle="--", alpha=0.5, color="#94a3b8")
         ax.grid(True, which="major", alpha=0.25)
         ax.set_ylabel("Variazione % da prima data")
@@ -228,10 +224,10 @@ class FinanceChart(QWidget):
         self.status.setText(
             f"Intervallo: {ds[0].isoformat()} — {ds[-1].isoformat()} | "
             f"Indici: {', '.join(self.indexes.keys())} | "
-            f"Futuro: previsione CAGR (5 anni) tratteggiata"
+            f"Futuro: modello CAGR-X (proxy Yahoo, tratteggiato)"
         )
 
-        # annotazione condivisa per hover
+        # Annotazione condivisa per hover
         ax = self.fig.axes[0]
         self._annot = ax.annotate(
             "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
@@ -240,7 +236,7 @@ class FinanceChart(QWidget):
         )
         self._annot.set_visible(False)
 
-    # ---------- Hover sui marker: mostra la % ----------
+    # ---------- Hover: mostra % al passaggio sui pallini ----------
     def _on_hover(self, event):
         if self._annot is None or event.inaxes is None:
             return
