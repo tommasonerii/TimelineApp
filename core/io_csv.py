@@ -15,10 +15,14 @@ def _map_columns(df: pd.DataFrame) -> Tuple[str, str, str]:
     try:
         subm_col = lower["submission date"]
         nome_col = lower["nome"]
-        eventi_col = lower["eventi:"]
-        return subm_col, nome_col, eventi_col
     except KeyError:
         raise ValueError("Il CSV deve contenere le colonne: 'Submission Date', 'Nome', 'Eventi'.")
+
+    eventi_col = lower.get("eventi") or lower.get("eventi:")
+    if eventi_col is None:
+        raise ValueError("Il CSV deve contenere le colonne: 'Submission Date', 'Nome', 'Eventi'.")
+
+    return subm_col, nome_col, eventi_col
 
 def load_events_csv(path: str) -> List[Event]:
     df = pd.read_csv(path)
