@@ -6,10 +6,9 @@ from datetime import datetime, timedelta
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QSizePolicy, QScrollArea,
-    QHBoxLayout, QPushButton, QMenu
+    QHBoxLayout, QPushButton, QCheckBox, QFrame
 )
-from PyQt6.QtCore import Qt, QEvent
-from PyQt6.QtGui import QAction
+from PyQt6.QtCore import Qt, QEvent, pyqtSignal
 
 import pandas as pd
 import numpy as np
@@ -24,57 +23,85 @@ from core.forecast import forecast_cagrx_from_yfinance
 MAX_SELECTED_INDEXES = 5
 TODAY_COLOR_HEX = "#0f172a"
 
-# Indici globali (Yahoo Finance tickers) + ETF indicizzati all'inflazione come "proxy"
+
+class IndexPopup(QFrame):
+    closed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.setFrameShape(QFrame.Shape.StyledPanel)
+        self.setStyleSheet("background:#ffffff; border:1px solid #cbd5e1; border-radius:8px;")
+
+    def hideEvent(self, event):
+        self.closed.emit()
+        super().hideEvent(event)
+
+
+IndexMeta = Tuple[str, str, str]
+
+INDEX_METADATA: List[IndexMeta] = [
+    ("S&P 500", "^GSPC", "US"),
+    ("NASDAQ 100", "^NDX", "US"),
+    ("Dow Jones", "^DJI", "US"),
+    ("Euro Stoxx 50", "^STOXX50E", "EU"),
+    ("FTSE 100", "^FTSE", "UK"),
+    ("DAX", "^GDAXI", "DE"),
+    ("CAC 40", "^FCHI", "FR"),
+    ("IBEX 35", "^IBEX", "ES"),
+    ("FTSE MIB", "FTSEMIB.MI", "IT"),
+    ("OMX Stockholm 30", "^OMXS30", "SE"),
+    ("AEX", "^AEX", "NL"),
+    ("SMI", "^SSMI", "CH"),
+    ("Nikkei 225", "^N225", "JP"),
+    ("Hang Seng", "^HSI", "HK"),
+    ("Shanghai Composite", "000001.SS", "CN"),
+    ("BSE Sensex", "^BSESN", "IN"),
+    ("ASX 200", "^AXJO", "AU"),
+    ("TSX Composite", "^GSPTSE", "CA"),
+    ("Bovespa", "^BVSP", "BR"),
+    ("US TIPS (TIP)", "TIP", "US"),
+    ("US TIPS short (VTIP)", "VTIP", "US"),
+    ("Euro IL Gov (INFL.MI)", "INFL.MI", "EU"),
+    ("Euro IL Gov (EIIL.L)", "EIIL.L", "EU"),
+]
+
 AVAILABLE_INDEXES: Dict[str, str] = {
-    "S&P 500": "^GSPC",
-    "NASDAQ 100": "^NDX",
-    "Dow Jones": "^DJI",
-    "Euro Stoxx 50": "^STOXX50E",
-    "FTSE 100": "^FTSE",
-    "DAX": "^GDAXI",
-    "CAC 40": "^FCHI",
-    "Nikkei 225": "^N225",
-    "Hang Seng": "^HSI",
-    "Shanghai Composite": "000001.SS",
-    "BSE Sensex": "^BSESN",
-    "ASX 200": "^AXJO",
-    "TSX Composite": "^GSPTSE",
-    "Bovespa": "^BVSP",
-    # Proxy inflazione (ETF inflation-linked)
-    "US TIPS (TIP)": "TIP",
-    "US TIPS short (VTIP)": "VTIP",
-    "Euro IL Gov (INFL.MI)": "INFL.MI",
-    "Euro IL Gov (EIIL.L)": "EIIL.L",
+    f"{name} ({country})": ticker for name, ticker, country in INDEX_METADATA
 }
 
 DEFAULT_SELECTION = [
-    "S&P 500",
-    "Euro Stoxx 50",
-    "FTSE 100",
-    "Nikkei 225",
+    "S&P 500 (US)",
+    "Euro Stoxx 50 (EU)",
+    "FTSE MIB (IT)",
+    "Nikkei 225 (JP)",
 ]
 
 # Colori CONSISTENTI per ogni indice
 INDEX_COLORS: Dict[str, str] = {
-    "S&P 500": "#1f77b4",
-    "NASDAQ 100": "#6366f1",
-    "Dow Jones": "#0ea5e9",
-    "Euro Stoxx 50": "#22c55e",
-    "FTSE 100": "#15803d",
-    "DAX": "#a855f7",
-    "CAC 40": "#ec4899",
-    "Nikkei 225": "#f97316",
-    "Hang Seng": "#f59e0b",
-    "Shanghai Composite": "#ef4444",
-    "BSE Sensex": "#14b8a6",
-    "ASX 200": "#0f766e",
-    "TSX Composite": "#8b5cf6",
-    "Bovespa": "#047857",
+    "S&P 500 (US)": "#1f77b4",
+    "NASDAQ 100 (US)": "#6366f1",
+    "Dow Jones (US)": "#0ea5e9",
+    "Euro Stoxx 50 (EU)": "#22c55e",
+    "FTSE 100 (UK)": "#15803d",
+    "DAX (DE)": "#a855f7",
+    "CAC 40 (FR)": "#ec4899",
+    "IBEX 35 (ES)": "#f59e0b",
+    "FTSE MIB (IT)": "#fb923c",
+    "OMX Stockholm 30 (SE)": "#0d9488",
+    "AEX (NL)": "#14b8a6",
+    "SMI (CH)": "#ef4444",
+    "Nikkei 225 (JP)": "#f97316",
+    "Hang Seng (HK)": "#facc15",
+    "Shanghai Composite (CN)": "#dc2626",
+    "BSE Sensex (IN)": "#0ea5a8",
+    "ASX 200 (AU)": "#0f766e",
+    "TSX Composite (CA)": "#8b5cf6",
+    "Bovespa (BR)": "#047857",
     # ETF (proxy inflazione)
-    "US TIPS (TIP)": "#7c3aed",
-    "US TIPS short (VTIP)": "#4f46e5",
-    "Euro IL Gov (INFL.MI)": "#ea580c",
-    "Euro IL Gov (EIIL.L)": "#d97706",
+    "US TIPS (TIP) (US)": "#7c3aed",
+    "US TIPS short (VTIP) (US)": "#4f46e5",
+    "Euro IL Gov (INFL.MI) (EU)": "#ea580c",
+    "Euro IL Gov (EIIL.L) (EU)": "#d97706",
 }
 
 
@@ -97,7 +124,7 @@ class FinanceChart(QWidget):
         self.selected_names = [name for name in DEFAULT_SELECTION if name in self.available_indexes]
         if not self.selected_names:
             self.selected_names = list(self.available_indexes.keys())[:MAX_SELECTED_INDEXES]
-        self._index_actions: Dict[str, QAction] = {}
+        self._index_checkboxes: Dict[str, QCheckBox] = {}
         self._last_event_dates: List[datetime] = []
 
         lay = QVBoxLayout(self)
@@ -121,10 +148,30 @@ class FinanceChart(QWidget):
 
         self.selector_button = QPushButton("Scegli indici")
         self.selector_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.selector_button.setStyleSheet("padding:6px 12px; border:1px solid #d1d5db; border-radius:8px; background:#f8fafc;")
-        self.selector_menu = QMenu(self.selector_button)
-        self.selector_button.setMenu(self.selector_menu)
+        self.selector_button.setCheckable(True)
+        self.selector_button.setStyleSheet(
+            "padding:6px 12px; border:1px solid #d1d5db; border-radius:8px; background:#f8fafc;"
+        )
+        self.selector_button.toggled.connect(self._toggle_popup)
         ctrl_layout.addWidget(self.selector_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.selector_popup = IndexPopup(self)
+        self.selector_popup.setMinimumWidth(240)
+        popup_layout = QVBoxLayout(self.selector_popup)
+        popup_layout.setContentsMargins(8, 8, 8, 8)
+        popup_layout.setSpacing(6)
+        self.selector_scroll = QScrollArea(self.selector_popup)
+        self.selector_scroll.setWidgetResizable(True)
+        self.selector_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.selector_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.selector_scroll.setMaximumHeight(260)
+        popup_layout.addWidget(self.selector_scroll)
+        self.selector_list = QWidget()
+        self.selector_scroll.setWidget(self.selector_list)
+        self.selector_list_layout = QVBoxLayout(self.selector_list)
+        self.selector_list_layout.setContentsMargins(0, 0, 0, 0)
+        self.selector_list_layout.setSpacing(4)
+        self.selector_popup.closed.connect(lambda: self.selector_button.setChecked(False))
 
         self.selection_summary = QLabel("")
         self.selection_summary.setStyleSheet("color:#1f2937; font-size:12px;")
@@ -224,6 +271,7 @@ class FinanceChart(QWidget):
         end = max(self._last_event_dates[-1], today_ts.date()) + timedelta(days=7)
 
         selected_map = {name: self.available_indexes[name] for name in self.selected_names}
+        skipped_indexes: List[str] = []
 
         try:
             data = yf.download(
@@ -290,12 +338,16 @@ class FinanceChart(QWidget):
         for name in aligned.columns:
             if name not in selected_map:
                 continue
-            color = INDEX_COLORS.get(name)
+            color = INDEX_COLORS.get(name, "#1f2937")
             base_price = float(base_row.get(name, float("nan")))
             if not np.isfinite(base_price) or base_price <= 0:
+                skipped_indexes.append(name)
                 continue
 
             today_price = float(aligned.loc[today_ts, name])
+            if not np.isfinite(today_price):
+                skipped_indexes.append(name)
+                continue
             y_today = (today_price / base_price - 1.0) * 100.0
 
             line_x: List[pd.Timestamp] = []
@@ -353,14 +405,15 @@ class FinanceChart(QWidget):
                     else:
                         y_all.append(y_today)
 
-            sc = ax.scatter(event_idx, y_all, s=30, color=color, edgecolor="#0f172a", linewidths=0.5)
+            sc = ax.scatter(event_idx, y_all, s=30, color=color, edgecolor="#0f172a",
+                            linewidths=0.5, picker=True)
             self._scatters.append((sc, {"name": name, "x": event_idx.to_pydatetime(), "y": y_all}))
 
             # Punto "oggi"
             today_point = ax.scatter([today_ts], [y_today], s=52, color=TODAY_COLOR_HEX,
-                                     edgecolor="#0f172a", linewidths=0.8, zorder=5)
+                                     edgecolor="#0f172a", linewidths=0.8, zorder=5, picker=True)
             self._scatters.append((today_point, {
-                "name": f"{name} (oggi)",
+                "name": f"{name} — oggi",
                 "x": [today_ts.to_pydatetime()],
                 "y": [float(y_today)],
             }))
@@ -375,11 +428,15 @@ class FinanceChart(QWidget):
         self.canvas.draw_idle()
 
         sel_summary = ", ".join(self.selected_names) if self.selected_names else "—"
-        self.status.setText(
+        status_text = (
             f"Intervallo: {self._last_event_dates[0].isoformat()} — {self._last_event_dates[-1].isoformat()} | "
             f"Indici selezionati: {sel_summary} | Punto oggi: {today_ts.date().isoformat()} | "
             "Futuro: modello CAGR-X (proxy Yahoo, tratteggiato)"
         )
+        if skipped_indexes:
+            skipped = ", ".join(skipped_indexes)
+            status_text += f" | Dati mancanti per: {skipped}"
+        self.status.setText(status_text)
 
         self._annot = ax.annotate(
             "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
@@ -389,15 +446,23 @@ class FinanceChart(QWidget):
         self._annot.set_visible(False)
 
     def _build_index_menu(self) -> None:
-        self.selector_menu.clear()
-        self._index_actions.clear()
+        while self.selector_list_layout.count():
+            item = self.selector_list_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._index_checkboxes.clear()
+
         for name in self.available_indexes:
-            action = QAction(name, self.selector_menu)
-            action.setCheckable(True)
-            action.setChecked(name in self.selected_names)
-            action.toggled.connect(lambda checked, n=name: self._on_index_toggled(n, checked))
-            self.selector_menu.addAction(action)
-            self._index_actions[name] = action
+            checkbox = QCheckBox(name, self.selector_list)
+            checkbox.setChecked(name in self.selected_names)
+            checkbox.setCursor(Qt.CursorShape.PointingHandCursor)
+            checkbox.setStyleSheet("padding:2px 4px;")
+            checkbox.toggled.connect(lambda checked, n=name: self._on_index_toggled(n, checked))
+            self.selector_list_layout.addWidget(checkbox)
+            self._index_checkboxes[name] = checkbox
+
+        self.selector_list_layout.addStretch(1)
 
     def _update_selection_summary(self) -> None:
         if self.selected_names:
@@ -405,15 +470,31 @@ class FinanceChart(QWidget):
         else:
             self.selection_summary.setText("Nessun indice selezionato")
 
+    def _toggle_popup(self, checked: bool) -> None:
+        if checked:
+            self._position_popup()
+            self.selector_popup.show()
+            self.selector_popup.raise_()
+        else:
+            self.selector_popup.hide()
+
+    def _position_popup(self) -> None:
+        popup_width = max(self.selector_button.width(), 240)
+        hint_height = self.selector_popup.sizeHint().height()
+        popup_height = min(max(hint_height, 120), 360)
+        self.selector_popup.resize(popup_width, popup_height)
+        global_pos = self.selector_button.mapToGlobal(self.selector_button.rect().bottomLeft())
+        self.selector_popup.move(global_pos)
+
     def _on_index_toggled(self, name: str, checked: bool) -> None:
         if checked:
             if name not in self.selected_names:
                 if len(self.selected_names) >= MAX_SELECTED_INDEXES:
-                    action = self._index_actions.get(name)
-                    if action is not None:
-                        action.blockSignals(True)
-                        action.setChecked(False)
-                        action.blockSignals(False)
+                    checkbox = self._index_checkboxes.get(name)
+                    if checkbox is not None:
+                        checkbox.blockSignals(True)
+                        checkbox.setChecked(False)
+                        checkbox.blockSignals(False)
                     self.status.setText(f"Puoi selezionare al massimo {MAX_SELECTED_INDEXES} indici.")
                     return
                 self.selected_names.append(name)

@@ -1,7 +1,7 @@
 # ui/compound_interest.py
 from __future__ import annotations
 
-from typing import Iterable, Dict, Optional, Tuple, List
+from typing import Iterable, Dict, Optional, Tuple, List, Any
 from datetime import datetime, date
 
 import numpy as np
@@ -100,18 +100,14 @@ class CompoundInterestWidget(QWidget):
 
         # Hover state
         self._scatter = None                 # punti evento (matplotlib PathCollection)
-        self._annot = None                   # tooltip per asse corrente
-        self._annot_ax = None
         self._hover_cid = self.canvas.mpl_connect("motion_notify_event", self._on_hover)
 
-        # dati linea per hover (x numeri matplotlib, y float)
-        self._xline = None
-        self._yline = None
-        self._line_marker = None
-        self._line_markers: Dict = {}
-        self._axes_data: Dict = {}
-        self._annot_by_ax: Dict = {}
+        self._series_data: Dict[str, Dict] = {}
+        self._series_by_axis: Dict = {}
+        self._markers: Dict[str, Any] = {}
+        self._annots: Dict[str, Any] = {}
         self._value_ax = None
+        self._event_annot_key: Optional[str] = None
 
         self._ev_points_xy: List[Tuple[datetime, float, str]] = []  # (dt, value, title)
 
@@ -167,13 +163,13 @@ class CompoundInterestWidget(QWidget):
 
     def recompute(self) -> None:
         self.fig.clear()
-        self._axes_data.clear()
-        self._line_markers.clear()
-        self._annot_by_ax.clear()
+        self._series_data.clear()
+        self._series_by_axis.clear()
+        self._markers.clear()
+        self._annots.clear()
         self._scatter = None
-        self._annot = None
-        self._annot_ax = None
         self._value_ax = None
+        self._event_annot_key = None
 
         if self._start_dt is None:
             self.status.setText("Seleziona una persona con almeno un evento: userò la prima data come partenza.")
@@ -194,116 +190,85 @@ class CompoundInterestWidget(QWidget):
         x_dates = df.index
         x_num = mdates.date2num(x_dates.to_pydatetime())
 
-        ax_val, ax_infl, ax_contrib = self.fig.subplots(
-            3, 1, sharex=True,
-            gridspec_kw={"height_ratios": [2.2, 1.4, 1.1], "hspace": 0.05}
-        )
+        ax = self.fig.add_subplot(111)
 
-        def _style_axis(ax):
-            ax.set_facecolor("#fcfcfd")
+        def _style_axis(axis):
+            axis.set_facecolor("#fcfcfd")
             for side in ("top", "right"):
-                ax.spines[side].set_visible(False)
+                axis.spines[side].set_visible(False)
             for side in ("left", "bottom"):
-                ax.spines[side].set_color("#e5e7eb")
-            ax.grid(True, which="major", alpha=0.28, linestyle="--", linewidth=0.8)
-            ax.tick_params(axis="both", labelsize=10)
-            ax.yaxis.set_major_formatter(FuncFormatter(lambda y, _pos: self._fmt_eur(y, 0)))
-            ax.margins(x=0.02)
+                axis.spines[side].set_color("#e5e7eb")
+            axis.grid(True, which="major", alpha=0.28, linestyle="--", linewidth=0.8)
+            axis.tick_params(axis="both", labelsize=10)
+            axis.yaxis.set_major_formatter(FuncFormatter(lambda y, _pos: self._fmt_eur(y, 0)))
+            axis.margins(x=0.02)
 
-        for axis in (ax_val, ax_infl, ax_contrib):
-            _style_axis(axis)
+        _style_axis(ax)
 
-        # --- Valore portafoglio (nominale) + Valore reale (deflazionato) ---
+        # --- Valore portafoglio, inflazione e contributi nello stesso grafico ---
         value_color = "#2563eb"
-        real_color = "#059669"
         val_series = df["value"].values.astype(float)
-        real_series = df["real_value"].values.astype(float)
+        line_val, = ax.plot(x_dates, val_series, linewidth=2.2, color=value_color, label="Valore portafoglio")
 
-        line_val, = ax_val.plot(x_dates, val_series, linewidth=2.2, color=value_color, label="Valore portafoglio")
-        line_real, = ax_val.plot(x_dates, real_series, linewidth=1.8, linestyle="--", color=real_color,
-                                 label="Valore reale (netto inflazione)")
-        ymax = float(max(val_series.max(), real_series.max()))
-        ymin = float(min(val_series.min(), real_series.min()))
-        ax_val.set_ylim(ymin * 0.98 if ymin > 0 else ymin - abs(ymax) * 0.02, ymax * 1.18)
-        ax_val.set_ylabel("Valore (€)")
-        ax_val.legend(frameon=False, loc="upper left", fontsize=10)
-
-        # --- Inflazione (crescita solo al tasso inflattivo) ---
         infl_color = "#f97316"
         infl_series = df["inflation_value"].values.astype(float)
-        line_infl, = ax_infl.plot(x_dates, infl_series, linewidth=2.0, color=infl_color, label="Valore con inflazione")
-        infl_max = max(float(infl_series.max()), 1.0)
-        ax_infl.set_ylim(0, infl_max * 1.15)
-        ax_infl.set_ylabel("Inflazione (€)")
-        ax_infl.legend(frameon=False, loc="upper left", fontsize=10)
+        line_infl, = ax.plot(x_dates, infl_series, linewidth=2.0, linestyle="--", color=infl_color,
+                              label="Valore con inflazione")
 
-        # --- Contributi cumulati ---
         area_color = "#60a5fa"
         contrib_vals = df["contrib"].values.astype(float)
-        ax_contrib.fill_between(x_dates, contrib_vals, step="pre", alpha=0.16, color=area_color)
-        line_contrib, = ax_contrib.plot(x_dates, contrib_vals, linewidth=1.8, color=area_color, label="Contributi cumulati")
-        contrib_max = max(float(contrib_vals.max()), 1.0)
-        ax_contrib.set_ylim(0, contrib_max * 1.18)
-        ax_contrib.set_ylabel("Contributi (€)")
-        ax_contrib.set_xlabel("Tempo")
+        ax.fill_between(x_dates, contrib_vals, step="pre", alpha=0.18, color=area_color)
+        line_contrib, = ax.plot(x_dates, contrib_vals, linewidth=1.8, color=area_color,
+                                 label="Contributi cumulati")
 
-        self._axes_data = {
-            ax_val: {
-                "x": x_num,
-                "y": val_series,
-                "label": "Valore portafoglio",
-                "fmt": self._fmt_eur,
-            },
-            ax_infl: {
-                "x": x_num,
-                "y": infl_series,
-                "label": "Valore con inflazione",
-                "fmt": self._fmt_eur,
-            },
-            ax_contrib: {
-                "x": x_num,
-                "y": contrib_vals,
-                "label": "Contributi cumulati",
-                "fmt": self._fmt_eur,
-            },
-        }
-        # Aggiunge anche il tracciato "reale" al dizionario dell'asse principale per hover separato
-        self._axes_data[(ax_val, "real")] = {
-            "x": x_num,
-            "y": real_series,
-            "label": "Valore reale (netto inflazione)",
-            "fmt": self._fmt_eur,
-            "color": real_color,
-        }
+        ymax = float(np.nanmax([
+            np.nanmax(val_series),
+            np.nanmax(infl_series),
+            np.nanmax(contrib_vals),
+        ]))
+        ymin = float(np.nanmin([
+            np.nanmin(val_series),
+            np.nanmin(infl_series),
+            np.nanmin(contrib_vals),
+        ]))
+        if not np.isfinite(ymin):
+            ymin = 0.0
+        if not np.isfinite(ymax):
+            ymax = 1.0
+        span = ymax - ymin if ymax != ymin else max(abs(ymax), 1.0)
+        ymin_adj = ymin - span * 0.04
+        ymax_adj = ymax + span * 0.18
+        ax.set_ylim(ymin_adj, ymax_adj)
+        ax.set_ylabel("Valore (€)")
+        ax.set_xlabel("Tempo")
+        ax.legend(frameon=False, loc="upper left", fontsize=10)
 
-        # Annotazioni e marker per ciascun asse linea principale
-        for axis, line in ((ax_val, line_val), (ax_infl, line_infl), (ax_contrib, line_contrib)):
-            annot = axis.annotate(
+        def _register_series(key: str, line, series_values: np.ndarray, label: str):
+            marker_color = line.get_color()
+            annot = ax.annotate(
                 "", xy=(0, 0), xytext=(10, 12), textcoords="offset points",
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
                 fontsize=9
             )
             annot.set_visible(False)
-            self._annot_by_ax[axis] = annot
-            marker, = axis.plot([], [], marker="o", markersize=5, color=line.get_color(), zorder=5)
-            self._line_markers[axis] = marker
+            marker, = ax.plot([], [], marker="o", markersize=5, color=marker_color, zorder=5)
+            self._series_data[key] = {
+                "axis": ax,
+                "x": x_num,
+                "y": series_values,
+                "label": label,
+                "fmt": self._fmt_eur,
+            }
+            self._series_by_axis.setdefault(ax, []).append(key)
+            self._annots[key] = annot
+            self._markers[key] = marker
 
-        # Marker/annot per la linea "reale" (secondo tracciato sullo stesso asse)
-        annot_real = ax_val.annotate(
-            "", xy=(0, 0), xytext=(10, -16), textcoords="offset points",
-            bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
-            fontsize=9
-        ); annot_real.set_visible(False)
-        self._annot_by_ax[(ax_val, "real")] = annot_real
-        marker_real, = ax_val.plot([], [], marker="o", markersize=5, color=real_color, zorder=5)
-        self._line_markers[(ax_val, "real")] = marker_real
+        _register_series("value", line_val, val_series, "Valore portafoglio")
+        _register_series("inflation", line_infl, infl_series, "Valore con inflazione")
+        _register_series("contrib", line_contrib, contrib_vals, "Contributi cumulati")
 
-        self._value_ax = ax_val
-        self._annot = self._annot_by_ax.get(ax_val)
-        self._annot_ax = ax_val
-        self._xline = x_num
-        self._yline = val_series
-        self._line_marker = self._line_markers.get(ax_val)
+        self._value_ax = ax
+        self._event_annot_key = "value"
 
         # --- pallini + etichette evento sul grafico principale ---
         self._ev_points_xy = []
@@ -318,7 +283,7 @@ class CompoundInterestWidget(QWidget):
             titles = ["; ".join([t for t in ev_map[ts] if t] or ["(senza titolo)"]) for ts in ev_idx]
             self._ev_points_xy = list(zip(aligned.index.to_pydatetime(), aligned["value"].values, titles))
 
-            self._scatter = ax_val.scatter(
+            self._scatter = ax.scatter(
                 aligned.index, aligned["value"].values,
                 s=56, zorder=4,
                 edgecolor="#0f172a", linewidths=0.7,
@@ -326,13 +291,22 @@ class CompoundInterestWidget(QWidget):
                 label="_nolegend_",
             )
             for (dt, val, title) in self._ev_points_xy:
-                ax_val.annotate(
-                    title, xy=(mdates.date2num(dt), val),
-                    xytext=(0, 8), textcoords="offset points",
+                dt_num = mdates.date2num(dt)
+                x_left, x_right = ax.get_xlim()
+                x_range = max(x_right - x_left, 1e-6)
+                if dt_num - x_left < 0.05 * x_range:
+                    ha = "left"; dx = 6
+                elif x_right - dt_num < 0.05 * x_range:
+                    ha = "right"; dx = -6
+                else:
+                    ha = "center"; dx = 0
+                ax.annotate(
+                    title, xy=(dt_num, val),
+                    xytext=(dx, 8), textcoords="offset points",
                     fontsize=8, color="#334155",
-                    ha="center", va="bottom",
+                    ha=ha, va="bottom",
                     bbox=dict(boxstyle="round,pad=0.18", fc="white", ec="none", alpha=0.85),
-                    clip_on=True
+                    clip_on=False
                 )
 
         self.canvas.draw_idle()
@@ -348,11 +322,11 @@ class CompoundInterestWidget(QWidget):
         # Se fuori dagli assi, spegni tutto
         if event.inaxes is None:
             updated = False
-            for annot in self._annot_by_ax.values():
+            for annot in self._annots.values():
                 if annot.get_visible():
                     annot.set_visible(False)
                     updated = True
-            for marker in self._line_markers.values():
+            for marker in self._markers.values():
                 marker.set_data([], [])
             if updated:
                 self.canvas.draw_idle()
@@ -367,86 +341,87 @@ class CompoundInterestWidget(QWidget):
                 i = ind["ind"][0]
                 dt, val, title = self._ev_points_xy[i]
                 dt_num = mdates.date2num(dt)
-                annot = self._annot_by_ax.get(self._value_ax)
+                annot = self._annots.get(self._event_annot_key)
                 if annot is not None:
                     annot.xy = (dt_num, float(val))
                     annot.set_text(f"{title}\n{dt:%Y-%m-%d}  •  {self._fmt_eur(val)}")
                     annot.set_visible(True)
-                marker = self._line_markers.get(self._value_ax)
-                if marker is not None:
+                for key, marker in self._markers.items():
                     marker.set_data([], [])
-                # Nascondi marker e annotazioni degli altri assi
-                for other_ax, other_marker in self._line_markers.items():
-                    if other_ax not in (self._value_ax, (self._value_ax, "real")):
-                        other_marker.set_data([], [])
-                        other_annot = self._annot_by_ax.get(other_ax)
+                    if key != self._event_annot_key:
+                        other_annot = self._annots.get(key)
                         if other_annot and other_annot.get_visible():
                             other_annot.set_visible(False)
-                # spegni anche il marker/annot della serie "reale"
-                mr = self._line_markers.get((self._value_ax, "real"))
-                if mr: mr.set_data([], [])
-                ar = self._annot_by_ax.get((self._value_ax, "real"))
-                if ar and ar.get_visible(): ar.set_visible(False)
                 self.canvas.draw_idle()
                 return
 
-        # 2) Tooltip sulla linea più vicina nell'asse corrente (inclusa la serie "reale" se asse principale)
-        # Scegli se stiamo hoverando il tracciato nominale o quello reale
-        # Se asse principale, prova prima reale (per evitare overlap), poi nominale
-        data_candidates = []
-        if ax is self._value_ax:
-            data_candidates.append((ax, "real"))
-            data_candidates.append(ax)
-        else:
-            data_candidates.append(ax)
-
-        handled = False
-        for key in data_candidates:
-            data = self._axes_data.get(key)
-            if data is None or event.xdata is None:
-                continue
-            x = float(event.xdata)
-            x_arr = data["x"]
-            if len(x_arr) == 0:
-                continue
-            idx = int(np.clip(np.searchsorted(x_arr, x), 1, len(x_arr) - 1))
-            left = idx - 1
-            nearest = idx if abs(x_arr[idx] - x) < abs(x - x_arr[left]) else left
-            dt_num = x_arr[nearest]
-            val = float(data["y"][nearest])
-
-            annot = self._annot_by_ax.get(key)
-            marker = self._line_markers.get(key)
-            if annot is None or marker is None:
-                continue
-
-            label = data["label"]
-            fmt = data["fmt"]
-            annot.xy = (dt_num, val)
-            annot.set_text(f"{label}\n{mdates.num2date(dt_num):%Y-%m-%d}  •  {fmt(val)}")
-            annot.set_visible(True)
-            marker.set_data([dt_num], [val])
-
-            # spegni gli altri marker/annot
-            for other_key, other_marker in self._line_markers.items():
-                if other_key == key:
-                    continue
-                other_marker.set_data([], [])
-                other_annot = self._annot_by_ax.get(other_key)
-                if other_annot and other_annot.get_visible():
-                    other_annot.set_visible(False)
-
-            self.canvas.draw_idle()
-            handled = True
-            break
-
-        if not handled:
-            # se nulla gestito, spegni annot/marker di quell'asse
-            for key in data_candidates:
-                annot = self._annot_by_ax.get(key)
-                marker = self._line_markers.get(key)
+        keys = self._series_by_axis.get(ax, [])
+        if not keys or event.xdata is None:
+            for key in keys:
+                annot = self._annots.get(key)
+                marker = self._markers.get(key)
                 if annot and annot.get_visible():
                     annot.set_visible(False)
                 if marker:
                     marker.set_data([], [])
             self.canvas.draw_idle()
+            return
+
+        best = None
+        for key in keys:
+            data = self._series_data.get(key)
+            if data is None:
+                continue
+            x_arr = data["x"]
+            x = float(event.xdata)
+            if len(x_arr) == 0:
+                continue
+            if len(x_arr) == 1:
+                nearest = 0
+            else:
+                idx = int(np.clip(np.searchsorted(x_arr, x), 1, len(x_arr) - 1))
+                left = idx - 1
+                nearest = idx if abs(x_arr[idx] - x) < abs(x - x_arr[left]) else left
+            dt_num = x_arr[nearest]
+            val = float(data["y"][nearest])
+            diff = abs(val - float(event.ydata)) if event.ydata is not None else 0.0
+            candidate = (diff, key, dt_num, val)
+            if best is None or diff < best[0]:
+                best = candidate
+            if event.ydata is None:
+                break
+
+        if best is None:
+            for key in keys:
+                annot = self._annots.get(key)
+                marker = self._markers.get(key)
+                if annot and annot.get_visible():
+                    annot.set_visible(False)
+                if marker:
+                    marker.set_data([], [])
+            self.canvas.draw_idle()
+            return
+
+        _, sel_key, dt_num, val = best
+        data = self._series_data[sel_key]
+        annot = self._annots.get(sel_key)
+        marker = self._markers.get(sel_key)
+        if annot is None or marker is None:
+            return
+
+        annot.xy = (dt_num, val)
+        annot.set_text(
+            f"{data['label']}\n{mdates.num2date(dt_num):%Y-%m-%d}  •  {data['fmt'](val)}"
+        )
+        annot.set_visible(True)
+        marker.set_data([dt_num], [val])
+
+        for other_key, other_marker in self._markers.items():
+            if other_key == sel_key:
+                continue
+            other_marker.set_data([], [])
+            other_annot = self._annots.get(other_key)
+            if other_annot and other_annot.get_visible():
+                other_annot.set_visible(False)
+
+        self.canvas.draw_idle()
