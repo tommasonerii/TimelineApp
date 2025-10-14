@@ -110,6 +110,7 @@ class CompoundInterestWidget(QWidget):
         # Hover state
         self._scatter = None                 # punti evento (matplotlib PathCollection)
         self._hover_cid = self.canvas.mpl_connect("motion_notify_event", self._on_hover)
+        self._draw_cid = self.canvas.mpl_connect("draw_event", self._on_draw_event)
 
         self._series_data: Dict[str, Dict] = {}
         self._series_by_axis: Dict = {}
@@ -119,6 +120,7 @@ class CompoundInterestWidget(QWidget):
         self._event_annot_key: Optional[str] = None
 
         self._ev_points_xy: List[Tuple[datetime, float, str]] = []  # (dt, value, title)
+        self._event_label_artists: List[Tuple[Any, float]] = []
 
     # ---------- Public API ----------
     def set_start_date(self, dt: Optional[datetime]) -> None:
@@ -227,6 +229,7 @@ class CompoundInterestWidget(QWidget):
         self._scatter = None
         self._value_ax = None
         self._event_annot_key = None
+        self._event_label_artists.clear()
 
         if self._start_dt is None:
             if self._event_points:
@@ -352,22 +355,18 @@ class CompoundInterestWidget(QWidget):
             )
             for (dt, val, title) in self._ev_points_xy:
                 dt_num = mdates.date2num(dt)
-                x_left, x_right = ax.get_xlim()
-                x_range = max(x_right - x_left, 1e-6)
-                if dt_num - x_left < 0.05 * x_range:
-                    ha = "left"; dx = 6
-                elif x_right - dt_num < 0.05 * x_range:
-                    ha = "right"; dx = -6
-                else:
-                    ha = "center"; dx = 0
-                ax.annotate(
+                annot = ax.annotate(
                     title, xy=(dt_num, val),
-                    xytext=(dx, 8), textcoords="offset points",
+                    xytext=(0, 8), textcoords="offset points",
                     fontsize=8, color="#334155",
-                    ha=ha, va="bottom",
+                    ha="center", va="bottom",
                     bbox=dict(boxstyle="round,pad=0.18", fc="white", ec="none", alpha=0.85),
                     clip_on=False
                 )
+                annot.set_zorder(6)
+                self._event_label_artists.append((annot, dt_num))
+
+            self._update_event_label_positions()
 
         self.canvas.draw_idle()
 
@@ -485,3 +484,22 @@ class CompoundInterestWidget(QWidget):
                 other_annot.set_visible(False)
 
         self.canvas.draw_idle()
+
+    def _update_event_label_positions(self) -> None:
+        if not self._event_label_artists or self._value_ax is None:
+            return
+        ax = self._value_ax
+        x_left, x_right = ax.get_xlim()
+        x_range = max(x_right - x_left, 1e-6)
+        for annot, dt_num in self._event_label_artists:
+            if dt_num - x_left < 0.05 * x_range:
+                ha = "left"; dx = 6
+            elif x_right - dt_num < 0.05 * x_range:
+                ha = "right"; dx = -6
+            else:
+                ha = "center"; dx = 0
+            annot.set_ha(ha)
+            annot.xyann = (dx, 8)
+
+    def _on_draw_event(self, _event) -> None:
+        self._update_event_label_positions()

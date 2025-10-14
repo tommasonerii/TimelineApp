@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, timedelta
+from functools import lru_cache
 from typing import List
 
 import numpy as np
@@ -26,6 +27,7 @@ def _date_range_daily(start: date, years: int) -> List[date]:
     return [start + timedelta(days=i) for i in range(n + 1)]
 
 
+@lru_cache(maxsize=64)
 def simulate_compound(start: date, p: CompoundParams) -> pd.DataFrame:
     """
     Simula interesse composto con contribuzioni mensili (il giorno 1 di ogni mese).
