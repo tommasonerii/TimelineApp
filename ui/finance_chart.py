@@ -285,9 +285,10 @@ class FinanceChart(QWidget):
             self.status.setText("Nessuna data evento disponibile.")
             self.canvas.draw_idle()
             self._annot = ax.annotate(
-                "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
+                "", xy=(0, 0), xytext=(-8, 10), textcoords="offset points",
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
-                fontsize=9
+                fontsize=9,
+                ha="right"
             )
             self._annot.set_visible(False)
             return
@@ -297,9 +298,10 @@ class FinanceChart(QWidget):
             self.status.setText("Seleziona almeno un indice (max 5) dal menu sopra il grafico.")
             self.canvas.draw_idle()
             self._annot = ax.annotate(
-                "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
+                "", xy=(0, 0), xytext=(-8, 10), textcoords="offset points",
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
-                fontsize=9
+                fontsize=9,
+                ha="right"
             )
             self._annot.set_visible(False)
             return
@@ -321,9 +323,10 @@ class FinanceChart(QWidget):
             self.status.setText("Errore download dati o dati assenti.")
             self.canvas.draw_idle()
             self._annot = ax.annotate(
-                "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
+                "", xy=(0, 0), xytext=(-8, 10), textcoords="offset points",
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
-                fontsize=9
+                fontsize=9,
+                ha="right"
             )
             self._annot.set_visible(False)
             return
@@ -346,9 +349,10 @@ class FinanceChart(QWidget):
                 self.status.setText("Formato dati inaspettato (niente Adj Close).")
                 self.canvas.draw_idle()
                 self._annot = ax.annotate(
-                    "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
+                    "", xy=(0, 0), xytext=(-8, 10), textcoords="offset points",
                     bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
-                    fontsize=9
+                    fontsize=9,
+                    ha="right"
                 )
                 self._annot.set_visible(False)
                 return
@@ -475,9 +479,10 @@ class FinanceChart(QWidget):
         self.status.setText(status_text)
 
         self._annot = ax.annotate(
-            "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
+            "", xy=(0, 0), xytext=(-8, 10), textcoords="offset points",
             bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
-            fontsize=9
+            fontsize=9,
+            ha="right"
         )
         self._annot.set_visible(False)
 

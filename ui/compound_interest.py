@@ -309,9 +309,10 @@ class CompoundInterestWidget(QWidget):
         def _register_series(key: str, line, series_values: np.ndarray, label: str):
             marker_color = line.get_color()
             annot = ax.annotate(
-                "", xy=(0, 0), xytext=(10, 12), textcoords="offset points",
+                "", xy=(0, 0), xytext=(-8, 12), textcoords="offset points",
                 bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
-                fontsize=9
+                fontsize=9,
+                ha="right"
             )
             annot.set_visible(False)
             marker, = ax.plot([], [], marker="o", markersize=5, color=marker_color, zorder=5)
