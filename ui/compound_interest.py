@@ -56,16 +56,8 @@ class CompoundInterestWidget(QWidget):
         self.spin_mgmt.setRange(0.0, 100.0); self.spin_mgmt.setDecimals(3)
         self.spin_mgmt.setValue(0.30); self.spin_mgmt.setSuffix(" % annuo (gestione)"); self.spin_mgmt.setSingleStep(0.10)
 
-        self.spin_overnight = QDoubleSpinBox()
-               # % giornaliero addizionale (0–5)
-        self.spin_overnight.setRange(0.0, 5.0); self.spin_overnight.setDecimals(4)
-        self.spin_overnight.setValue(0.0000); self.spin_overnight.setSuffix(" % giorn."); self.spin_overnight.setSingleStep(0.01)
-
         self.spin_years = QSpinBox()
         self.spin_years.setRange(1, 100); self.spin_years.setValue(20); self.spin_years.setSuffix(" anni")
-
-        self.spin_day = QSpinBox()
-        self.spin_day.setRange(1, 28); self.spin_day.setValue(1); self.spin_day.setSuffix("° giorno del mese")
 
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
@@ -75,9 +67,7 @@ class CompoundInterestWidget(QWidget):
         form.addRow("Versamento mensile", self.spin_monthly)
         form.addRow("Tasso annuo", self.spin_rate)
         form.addRow("Commissione gestione", self.spin_mgmt)
-        form.addRow("Commissione overnight", self.spin_overnight)
         form.addRow("Orizzonte", self.spin_years)
-        form.addRow("Giorno versamento", self.spin_day)
 
         self.btn_calc = QPushButton("Ricalcola"); self.btn_calc.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -109,7 +99,7 @@ class CompoundInterestWidget(QWidget):
         # Signals
         self.btn_calc.clicked.connect(self.recompute)
         for w in (self.spin_initial, self.spin_monthly, self.spin_rate,
-                  self.spin_mgmt, self.spin_overnight, self.spin_years, self.spin_day):
+                  self.spin_mgmt, self.spin_years):
             w.valueChanged.connect(self.recompute)
 
         # Hover state
@@ -170,9 +160,7 @@ class CompoundInterestWidget(QWidget):
             monthly=float(self.spin_monthly.value()),
             annual_rate=float(self.spin_rate.value())/100.0,
             mgmt_fee_annual=float(self.spin_mgmt.value())/100.0,
-            overnight_daily=float(self.spin_overnight.value())/100.0,
             years=int(self.spin_years.value()),
-            contribution_day=int(self.spin_day.value()),
         )
 
     def recompute(self) -> None:
@@ -268,8 +256,7 @@ class CompoundInterestWidget(QWidget):
 
         self.status.setText(
             f"Start: {start_d.isoformat()} | Tasso annuo: {p.annual_rate*100:.2f}% | "
-            f"Gestione: {p.mgmt_fee_annual*100:.2f}% | Overnight: {p.overnight_daily*100:.4f}%/g | "
-            f"Giorno versamento: {p.contribution_day}"
+            f"Gestione: {p.mgmt_fee_annual*100:.2f}% | Versamento: ogni 1° del mese"
         )
 
     def _on_hover(self, event):
