@@ -11,10 +11,10 @@ from matplotlib.figure import Figure
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.ticker import FuncFormatter
 
-from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtCore import Qt, QEvent, QDate
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QSizePolicy, QScrollArea,
-    QFormLayout, QDoubleSpinBox, QSpinBox, QHBoxLayout, QPushButton
+    QFormLayout, QDoubleSpinBox, QSpinBox, QHBoxLayout, QPushButton, QDateEdit
 )
 
 from core.compounding import simulate_compound, CompoundParams
@@ -28,9 +28,10 @@ class CompoundInterestWidget(QWidget):
 
         self._start_dt: Optional[datetime] = None
         self._event_points: List[Tuple[date, str]] = []  # (data, titolo)
+        self._suppress_start_signal = False
 
         # ---- Titolo
-        self.title = QLabel("Calcolatore interesse composto (dalla prima data)")
+        self.title = QLabel("Calcolatore interesse composto")
         self.title.setStyleSheet("color:#111; font-weight:600; margin: 4px 0;")
         self.title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
@@ -54,10 +55,17 @@ class CompoundInterestWidget(QWidget):
         self.spin_years = QSpinBox()
         self.spin_years.setRange(1, 100); self.spin_years.setValue(20); self.spin_years.setSuffix(" anni")
 
+        self.start_date_edit = QDateEdit()
+        self.start_date_edit.setDisplayFormat("yyyy-MM-dd")
+        self.start_date_edit.setCalendarPopup(True)
+        self.start_date_edit.setEnabled(False)
+        self.start_date_edit.setToolTip("Scegli la data da cui far partire la simulazione")
+
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         form.setFormAlignment(Qt.AlignmentFlag.AlignLeft)
         form.setHorizontalSpacing(12); form.setVerticalSpacing(6)
+        form.addRow("Data di partenza", self.start_date_edit)
         form.addRow("Capitale iniziale", self.spin_initial)
         form.addRow("Versamento mensile", self.spin_monthly)
         form.addRow("Tasso annuo", self.spin_rate)
@@ -97,6 +105,7 @@ class CompoundInterestWidget(QWidget):
         for w in (self.spin_initial, self.spin_monthly, self.spin_rate,
                   self.spin_mgmt, self.spin_inflation, self.spin_years):
             w.valueChanged.connect(self.recompute)
+        self.start_date_edit.dateChanged.connect(self._on_start_date_changed)
 
         # Hover state
         self._scatter = None                 # punti evento (matplotlib PathCollection)
@@ -114,6 +123,7 @@ class CompoundInterestWidget(QWidget):
     # ---------- Public API ----------
     def set_start_date(self, dt: Optional[datetime]) -> None:
         self._start_dt = dt
+        self._sync_start_date_edit()
         self.recompute()
 
     def set_event_points(self, points: Iterable[Tuple[datetime, str]]) -> None:
@@ -121,6 +131,7 @@ class CompoundInterestWidget(QWidget):
         self._event_points = sorted(
             [(p[0].date() if isinstance(p[0], datetime) else p[0], str(p[1])) for p in points]
         )
+        self._sync_start_date_edit()
         self.recompute()
 
     # retrocompatibilità
@@ -130,6 +141,52 @@ class CompoundInterestWidget(QWidget):
     # ---------- Interni ----------
     def _cfg_money(self, sp: QDoubleSpinBox, value: float, suffix: str, minv: float, maxv: float, step: float):
         sp.setRange(minv, maxv); sp.setDecimals(2); sp.setValue(value); sp.setSuffix(suffix); sp.setSingleStep(step)
+
+    def _on_start_date_changed(self, qdate: QDate) -> None:
+        if self._suppress_start_signal:
+            return
+        if not qdate.isValid():
+            return
+        self._start_dt = datetime.combine(qdate.toPyDate(), datetime.min.time())
+        self.recompute()
+
+    def _sync_start_date_edit(self) -> None:
+        self._suppress_start_signal = True
+        try:
+            if not self._event_points:
+                if self._start_dt is not None:
+                    qd = QDate(self._start_dt.year, self._start_dt.month, self._start_dt.day)
+                    self.start_date_edit.setDate(qd)
+                else:
+                    self.start_date_edit.setDate(QDate.currentDate())
+                self.start_date_edit.setEnabled(False)
+                return
+
+            dates = [d for d, _ in self._event_points]
+            min_d = min(dates)
+            max_d = max(dates)
+
+            qmin = QDate(min_d.year, min_d.month, min_d.day)
+            qmax = QDate(max_d.year, max_d.month, max_d.day)
+            self.start_date_edit.setMinimumDate(qmin)
+            self.start_date_edit.setMaximumDate(qmax)
+
+            if self._start_dt is None:
+                target_date = min_d
+            else:
+                current_date = self._start_dt.date()
+                if current_date < min_d:
+                    target_date = min_d
+                elif current_date > max_d:
+                    target_date = max_d
+                else:
+                    target_date = current_date
+
+            self._start_dt = datetime.combine(target_date, datetime.min.time())
+            self.start_date_edit.setDate(QDate(self._start_dt.year, self._start_dt.month, self._start_dt.day))
+            self.start_date_edit.setEnabled(True)
+        finally:
+            self._suppress_start_signal = False
 
     def _fmt_eur(self, v: float, decimals: int = 2) -> str:
         s = f"{v:,.{decimals}f}"
@@ -172,7 +229,10 @@ class CompoundInterestWidget(QWidget):
         self._event_annot_key = None
 
         if self._start_dt is None:
-            self.status.setText("Seleziona una persona con almeno un evento: userò la prima data come partenza.")
+            if self._event_points:
+                self.status.setText("Scegli una data di partenza per avviare la simulazione.")
+            else:
+                self.status.setText("Seleziona una persona con almeno un evento per generare la simulazione.")
             self.canvas.draw_idle(); return
 
         start_d = self._start_dt.date()

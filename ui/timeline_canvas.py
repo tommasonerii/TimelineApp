@@ -1,7 +1,7 @@
 # ui/timeline_canvas.py
 from __future__ import annotations
 from .font_utils import load_lato_family
-from typing import Dict, List, Optional, Literal, Tuple
+from typing import Dict, List, Optional, Literal
 from datetime import datetime, timedelta
 
 from PyQt6.QtCore import Qt, QRectF
@@ -33,9 +33,6 @@ TODAY_COLOR   = QColor("#0f172a")
 # Font (scaling relativo all’altezza viewport)
 LABEL_VH_SCALE = 0.023
 DATE_VH_SCALE  = 0.020
-
-# Distanza minima orizzontale tra i centri dei pallini (in px)
-MIN_MARKER_GAP_PX = 35
 
 # Margini
 SIDE_PAD_RATIO = 0.03  # padding per asse in X (oltre al safe_pad)
@@ -194,9 +191,6 @@ class TimelineCanvas(QGraphicsView):
             rel = max(0.0, min(1.0, rel))
             return axis_x1 + (axis_x2 - axis_x1) * rel
 
-        # Occupazioni per evitare sovrapposizioni dei marker
-        occupied: List[QRectF] = []
-
         # "OGGI"
         now = datetime.now()
         if dt_min_pad <= now <= dt_max_pad:
@@ -226,32 +220,21 @@ class TimelineCanvas(QGraphicsView):
             oggi_txt.setZValue(0.3)
             self.scene.addItem(oggi_txt)
 
-            occupied.append(QRectF(x_now - r - MIN_MARKER_GAP_PX/2, y0 - r,
-                                   2*r + MIN_MARKER_GAP_PX, 2*r))
-
-        min_gap = max(MIN_MARKER_GAP_PX, int(icon_size * 0.60))
-
-        last_label_rect: Optional[QRectF] = None
+        last_label_rects: Dict[Literal["above", "below"], List[QRectF]] = {
+            "above": [],
+            "below": [],
+        }
         next_side: Literal["above", "below"] = "above"
 
         for ev in self.events:
             x_nom = x_from_dt(ev.dt)
-            x = self._nearest_free_x(
-                x_nominal=x_nom,
-                icon_size=icon_size,
-                occupied=occupied,
-                min_gap=min_gap,
-                x_min=safe_pad,
-                x_max=vw - safe_pad,
-            )
+            x = max(float(safe_pad) + icon_size / 2,
+                    min(float(vw - safe_pad) - icon_size / 2, x_nom))
 
             # Marker icona/cerchio
             marker_top = max(safe_pad, min(vh - safe_pad - icon_size, y0 - icon_size / 2))
             if not self._try_draw_icon(x, marker_top, ev, icon_size, is_future=(ev.dt > now)):
                 self._draw_circle(x, marker_top, ev, icon_size, is_future=(ev.dt > now))
-
-            occupied.append(QRectF(x - icon_size/2 - min_gap/2, y0 - icon_size/2,
-                                   icon_size + min_gap, icon_size))
 
             # ------- Etichetta centrata -------
             label_text = (ev.titolo or "").upper()
@@ -284,20 +267,40 @@ class TimelineCanvas(QGraphicsView):
             above_rect = QRectF(bx, y0 - label_gap - bh, bw, bh)
             below_rect = QRectF(bx, y0 + label_gap,   bw, bh)
 
-            if last_label_rect and (above_rect.intersects(last_label_rect) or below_rect.intersects(last_label_rect)):
-                side = next_side
-                next_side = "below" if next_side == "above" else "above"
-            else:
-                side = "above"
-                next_side = "below"
+            preferred_side = next_side
+            alternate_side = "below" if preferred_side == "above" else "above"
 
-            bubble_rect = above_rect if side == "above" else below_rect
+            def _has_overlap(rect: QRectF, items: List[QRectF]) -> bool:
+                return any(rect.intersects(other) for other in items)
+
+            candidates = {"above": above_rect, "below": below_rect}
+            side = preferred_side
+            if _has_overlap(candidates[side], last_label_rects[side]):
+                if not _has_overlap(candidates[alternate_side], last_label_rects[alternate_side]):
+                    side = alternate_side
+                else:
+                    overlap_pref = self._overlap_amount(candidates[side], last_label_rects[side])
+                    overlap_alt = self._overlap_amount(candidates[alternate_side], last_label_rects[alternate_side])
+                    side = alternate_side if overlap_alt < overlap_pref else preferred_side
+
+            bubble_rect = candidates[side]
             bubble_rect = QRectF(
                 bubble_rect.x(),
                 max(float(safe_pad), min(float(vh - bh - safe_pad), bubble_rect.y())),
                 bubble_rect.width(),
                 bubble_rect.height(),
             )
+
+            bubble_rect = self._resolve_label_overlap(
+                rect=bubble_rect,
+                others=last_label_rects[side],
+                x_min=float(safe_pad),
+                x_max=float(vw - safe_pad - bubble_rect.width()),
+                preferred_center=float(x),
+            )
+
+            last_label_rects[side].append(bubble_rect)
+            next_side = "below" if side == "above" else "above"
 
             # Bubble
             cat_color = color_for(ev.categoria)
@@ -309,7 +312,6 @@ class TimelineCanvas(QGraphicsView):
             label.setZValue(1.0)
             label.setToolTip(f"{ev.titolo}\n{ev.categoria}\n{ev.dt:%Y-%m-%d}")
             self.scene.addItem(label)
-            last_label_rect = bubble_rect
 
             # Connettore
             pen_conn = QPen(QColor("#9aa4ae"), 1)
@@ -398,38 +400,71 @@ class TimelineCanvas(QGraphicsView):
         self.scene.addItem(circle)
 
     # ---------- Utility ----------
-    def _nearest_free_x(
+    def _overlap_amount(self, rect: QRectF, others: List[QRectF]) -> float:
+        total = 0.0
+        for other in others:
+            inter = rect.intersected(other)
+            if not inter.isNull():
+                total += inter.width() * inter.height()
+        return total
+
+    def _resolve_label_overlap(
         self,
-        x_nominal: float,
-        icon_size: int,
-        occupied: List[QRectF],
-        min_gap: int,
+        rect: QRectF,
+        others: List[QRectF],
         x_min: float,
         x_max: float,
-    ) -> float:
-        """Trova la X libera più vicina che rispetti un gap minimo fisso tra i centri."""
-        r = icon_size / 2
+        preferred_center: float,
+    ) -> QRectF:
+        """Sposta la label in orizzontale per evitare sovrapposizioni con quelle già disegnate."""
 
-        def collides(xcand: float) -> bool:
-            col = QRectF(xcand - (r + min_gap/2), -10000, 2*(r + min_gap/2), 20000)
-            return any(col.intersects(o) for o in occupied)
+        result = QRectF(rect)
+        gap = max(6.0, rect.height() * 0.15)
 
-        # Clamp iniziale dentro i limiti
-        x_nominal = max(x_min + r + min_gap/2, min(x_max - r - min_gap/2, x_nominal))
+        def overlaps_any(r: QRectF) -> List[QRectF]:
+            return [o for o in others if r.intersects(o)]
 
-        if not collides(x_nominal):
-            return x_nominal
+        attempts = 0
+        overlapping = overlaps_any(result)
+        while overlapping and attempts < 16:
+            attempts += 1
+            shift_right = max((o.right() + gap) - result.left() for o in overlapping)
+            shift_left = max(result.right() - (o.left() - gap) for o in overlapping)
 
-        for off in range(2, 240, 2):  # piccoli passi dx/sx
-            for cand in (x_nominal + off, x_nominal - off):
-                if cand < x_min + r + min_gap/2 or cand > x_max - r - min_gap/2:
-                    continue
-                if not collides(cand):
-                    return cand
+            cand_right = QRectF(result)
+            cand_right.translate(shift_right, 0.0)
+            cand_left = QRectF(result)
+            cand_left.translate(-shift_left, 0.0)
 
-        return max(x_min + r + min_gap/2, min(x_max - r - min_gap/2, x_nominal))
+            valid_right = cand_right.left() <= x_max
+            valid_left = cand_left.left() >= x_min
 
-    # ---------- Font helpers ----------        """Carica le varianti Lato dai percorsi forniti. Ritorna (family_name, pesi_disponibili)."""
+            if valid_right and valid_left:
+                center_right = cand_right.center().x()
+                center_left = cand_left.center().x()
+                if abs(center_right - preferred_center) <= abs(center_left - preferred_center):
+                    result = cand_right
+                else:
+                    result = cand_left
+            elif valid_right:
+                result = cand_right
+            elif valid_left:
+                result = cand_left
+            else:
+                break
+
+            new_left = max(x_min, min(result.left(), x_max))
+            result.moveLeft(new_left)
+            overlapping = overlaps_any(result)
+
+        if result.left() < x_min:
+            result.moveLeft(x_min)
+        if result.left() > x_max:
+            result.moveLeft(x_max)
+
+        return result
+
+    # ---------- Font helpers ----------
 
     def _make_font(self, size: int, prefer: List[str]) -> QFont:
         """Crea un QFont scegliendo il peso migliore disponibile secondo l’ordine preferito."""
