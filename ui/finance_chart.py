@@ -2,7 +2,8 @@
 from __future__ import annotations
 
 from typing import Iterable, Dict, List, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
+from collections import OrderedDict
 
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QLabel, QSizePolicy, QScrollArea,
@@ -126,6 +127,7 @@ class FinanceChart(QWidget):
             self.selected_names = list(self.available_indexes.keys())[:MAX_SELECTED_INDEXES]
         self._index_checkboxes: Dict[str, QCheckBox] = {}
         self._last_event_dates: List[datetime] = []
+        self._history_cache: "OrderedDict[Tuple[Tuple[str, ...], str, str], pd.DataFrame]" = OrderedDict()
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -198,6 +200,46 @@ class FinanceChart(QWidget):
         self._annot = None
         self._hover_cid = self.canvas.mpl_connect("motion_notify_event", self._on_hover)
         self._scatters: List[Tuple] = []  # [(PathCollection, dict(meta))]
+
+    @staticmethod
+    def _format_value(value: float) -> str:
+        s = f"{value:,.2f}"
+        return s.replace(",", "\u202f").replace(".", ",")
+
+    def _cache_download(self, tickers: Tuple[str, ...], start: datetime | date, end: datetime | date) -> pd.DataFrame | None:
+        """Scarica (o recupera dalla cache) la storia prezzi per i ticker richiesti."""
+        if not tickers:
+            return None
+
+        download_end = (end + timedelta(days=1)).isoformat()
+        cache_key = (tickers, start.isoformat(), download_end)
+        cached = self._history_cache.get(cache_key)
+        if cached is not None:
+            # Move-to-end per avere una LRU semplice
+            self._history_cache.move_to_end(cache_key)
+            return cached.copy()
+
+        try:
+            data = yf.download(
+                tickers=list(tickers),
+                start=start.isoformat(),
+                end=download_end,
+                auto_adjust=False,
+                progress=False,
+                group_by="ticker",
+                threads=True
+            )
+        except Exception:
+            return None
+
+        if data is None or len(data) == 0:
+            return None
+
+        self._history_cache[cache_key] = data.copy()
+        # Limita la cache per non crescere senza controllo
+        while len(self._history_cache) > 6:
+            self._history_cache.popitem(last=False)
+        return data.copy()
 
     # ---------- Rerouting scroll ----------
     def eventFilter(self, obj, event):
@@ -273,29 +315,10 @@ class FinanceChart(QWidget):
         selected_map = {name: self.available_indexes[name] for name in self.selected_names}
         skipped_indexes: List[str] = []
 
-        try:
-            data = yf.download(
-                tickers=list(selected_map.values()),
-                start=start.isoformat(),
-                end=(end + timedelta(days=1)).isoformat(),
-                auto_adjust=False,
-                progress=False,
-                group_by="ticker",
-                threads=True
-            )
-        except Exception as e:
-            self.status.setText(f"Errore download dati: {e}")
-            self.canvas.draw_idle()
-            self._annot = ax.annotate(
-                "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
-                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
-                fontsize=9
-            )
-            self._annot.set_visible(False)
-            return
-
-        if data is None or len(data) == 0:
-            self.status.setText("Nessun dato scaricato.")
+        tickers_tuple = tuple(selected_map.values())
+        data = self._cache_download(tickers_tuple, start, end)
+        if data is None:
+            self.status.setText("Errore download dati o dati assenti.")
             self.canvas.draw_idle()
             self._annot = ax.annotate(
                 "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
@@ -391,23 +414,35 @@ class FinanceChart(QWidget):
                 label_used = True
 
             # Punti evento
-            y_all = []
+            y_all: List[float] = []
+            value_all: List[float] = []
             for d in event_idx:
                 if d <= today_ts:
                     price = float(aligned.loc[d, name])
                     y_all.append(float((price / base_price - 1.0) * 100.0))
+                    value_all.append(price)
                 else:
                     pred_val = None
                     if not y_future_prices.empty and d in y_future_prices.index:
                         pred_val = float(y_future_prices.loc[d])
                     if pred_val is not None:
                         y_all.append(float((pred_val / base_price - 1.0) * 100.0))
+                        value_all.append(pred_val)
                     else:
                         y_all.append(y_today)
+                        value_all.append(today_price)
 
             sc = ax.scatter(event_idx, y_all, s=30, color=color, edgecolor="#0f172a",
                             linewidths=0.5, picker=True)
-            self._scatters.append((sc, {"name": name, "x": event_idx.to_pydatetime(), "y": y_all}))
+            self._scatters.append((
+                sc,
+                {
+                    "name": name,
+                    "x": list(event_idx.to_pydatetime()),
+                    "pct": y_all,
+                    "value": value_all,
+                }
+            ))
 
             # Punto "oggi"
             today_point = ax.scatter([today_ts], [y_today], s=52, color=TODAY_COLOR_HEX,
@@ -415,7 +450,8 @@ class FinanceChart(QWidget):
             self._scatters.append((today_point, {
                 "name": f"{name} — oggi",
                 "x": [today_ts.to_pydatetime()],
-                "y": [float(y_today)],
+                "pct": [float(y_today)],
+                "value": [float(today_price)],
             }))
 
         ax.axhline(0, linewidth=1, linestyle="--", alpha=0.45, color="#94a3b8")
@@ -516,9 +552,17 @@ class FinanceChart(QWidget):
                 continue
             i = ind["ind"][0]
             dt = meta["x"][i]
-            y  = float(meta["y"][i])
-            self._annot.xy = (mdates.date2num(dt), y)
-            self._annot.set_text(f"{meta['name']}\n{dt:%Y-%m-%d}  •  {y:.1f}%")
+            pct_vals = meta.get("pct") or meta.get("y")
+            pct = float(pct_vals[i]) if pct_vals is not None else float("nan")
+            val_list = meta.get("value")
+            value = float(val_list[i]) if val_list and np.isfinite(val_list[i]) else None
+            self._annot.xy = (mdates.date2num(dt), pct)
+            detail_parts = [f"{dt:%Y-%m-%d}"]
+            if value is not None:
+                detail_parts.append(self._format_value(value))
+            if np.isfinite(pct):
+                detail_parts.append(f"{pct:+.1f}%")
+            self._annot.set_text(f"{meta['name']}\n" + "  •  ".join(detail_parts))
             self._annot.set_visible(True)
             self.canvas.draw_idle()
             shown = True

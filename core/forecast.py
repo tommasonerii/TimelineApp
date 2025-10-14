@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 from typing import Optional
+from functools import lru_cache
 
 import numpy as np
 import pandas as pd
@@ -10,19 +11,20 @@ import yfinance as yf
 
 
 # ------------------ utilità base ------------------
-def _fetch_adj_close(ticker: str, start: date | datetime, end: date | datetime) -> pd.Series:
-    """
-    Scarica 'Adj Close' da Yahoo Finance (indice per data, ordinata).
-    """
+@lru_cache(maxsize=128)
+def _cached_adj_close(ticker: str, start_iso: str, end_iso: str) -> pd.Series:
+    end_ts = pd.Timestamp(end_iso)
     df = yf.download(
         tickers=ticker,
-        start=pd.Timestamp(start).date().isoformat(),
-        end=(pd.Timestamp(end).date() + pd.Timedelta(days=1)).isoformat(),  # end esclusiva
+        start=start_iso,
+        end=(end_ts + pd.Timedelta(days=1)).date().isoformat(),
         auto_adjust=False,
         progress=False,
         group_by="ticker",
         threads=True,
     )
+    if df is None or len(df) == 0:
+        return pd.Series(dtype=float)
     if isinstance(df.columns, pd.MultiIndex):
         s = df.xs("Adj Close", axis=1, level=1)
         if isinstance(s, pd.DataFrame):
@@ -30,6 +32,13 @@ def _fetch_adj_close(ticker: str, start: date | datetime, end: date | datetime) 
     else:
         s = df["Adj Close"]
     return s.dropna().sort_index()
+
+
+def _fetch_adj_close(ticker: str, start: date | datetime, end: date | datetime) -> pd.Series:
+    start_date = pd.Timestamp(start).date()
+    end_date = pd.Timestamp(end).date()
+    series = _cached_adj_close(ticker, start_date.isoformat(), end_date.isoformat())
+    return series.copy()
 
 
 def _estimate_cagr(series: pd.Series, years_window: float) -> float:
