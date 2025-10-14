@@ -4,8 +4,12 @@ from __future__ import annotations
 from typing import Iterable, Dict, List, Tuple
 from datetime import datetime, timedelta
 
-from PyQt6.QtWidgets import QWidget, QVBoxLayout, QLabel, QSizePolicy, QScrollArea
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QLabel, QSizePolicy, QScrollArea,
+    QHBoxLayout, QPushButton, QMenu
+)
 from PyQt6.QtCore import Qt, QEvent
+from PyQt6.QtGui import QAction
 import pandas as pd
 import numpy as np
 import yfinance as yf
@@ -16,22 +20,50 @@ from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 from core.forecast import forecast_cagrx_from_yfinance
 
+MAX_SELECTED_INDEXES = 5
+TODAY_COLOR_HEX = "#0f172a"
+
 # Indici globali (Yahoo Finance tickers)
-DEFAULT_INDEXES: Dict[str, str] = {
-    "S&P 500":       "^GSPC",
+AVAILABLE_INDEXES: Dict[str, str] = {
+    "S&P 500": "^GSPC",
+    "NASDAQ 100": "^NDX",
+    "Dow Jones": "^DJI",
     "Euro Stoxx 50": "^STOXX50E",
-    "FTSE 100":      "^FTSE",
-    "Nikkei 225":    "^N225",
-    "Hang Seng":     "^HSI",
+    "FTSE 100": "^FTSE",
+    "DAX": "^GDAXI",
+    "CAC 40": "^FCHI",
+    "Nikkei 225": "^N225",
+    "Hang Seng": "^HSI",
+    "Shanghai Composite": "000001.SS",
+    "BSE Sensex": "^BSESN",
+    "ASX 200": "^AXJO",
+    "TSX Composite": "^GSPTSE",
+    "Bovespa": "^BVSP",
 }
+
+DEFAULT_SELECTION = [
+    "S&P 500",
+    "Euro Stoxx 50",
+    "FTSE 100",
+    "Nikkei 225",
+]
 
 # Colori CONSISTENTI per ogni indice
 INDEX_COLORS: Dict[str, str] = {
-    "S&P 500":       "#1f77b4",  # blue
-    "Euro Stoxx 50": "#2ca02c",  # green
-    "FTSE 100":      "#9467bd",  # purple
-    "Nikkei 225":    "#ff7f0e",  # orange
-    "Hang Seng":     "#7f7f7f",  # gray
+    "S&P 500": "#1f77b4",
+    "NASDAQ 100": "#6366f1",
+    "Dow Jones": "#0ea5e9",
+    "Euro Stoxx 50": "#22c55e",
+    "FTSE 100": "#15803d",
+    "DAX": "#a855f7",
+    "CAC 40": "#ec4899",
+    "Nikkei 225": "#f97316",
+    "Hang Seng": "#f59e0b",
+    "Shanghai Composite": "#ef4444",
+    "BSE Sensex": "#14b8a6",
+    "ASX 200": "#0f766e",
+    "TSX Composite": "#8b5cf6",
+    "Bovespa": "#047857",
 }
 
 
@@ -48,7 +80,14 @@ class FinanceChart(QWidget):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
-        self.indexes = indexes or DEFAULT_INDEXES
+        base_indexes = indexes or AVAILABLE_INDEXES
+        # mantieni l'ordine dichiarato
+        self.available_indexes = {name: base_indexes[name] for name in base_indexes}
+        self.selected_names = [name for name in DEFAULT_SELECTION if name in self.available_indexes]
+        if not self.selected_names:
+            self.selected_names = list(self.available_indexes.keys())[:MAX_SELECTED_INDEXES]
+        self._index_actions: Dict[str, QAction] = {}
+        self._last_event_dates: List[datetime] = []
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -58,6 +97,32 @@ class FinanceChart(QWidget):
         self.title.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.title.setStyleSheet("color:#111; font-weight:600; margin: 4px 0;")
         lay.addWidget(self.title)
+
+        controls = QWidget()
+        ctrl_layout = QHBoxLayout(controls)
+        ctrl_layout.setContentsMargins(0, 0, 0, 0)
+        ctrl_layout.setSpacing(8)
+
+        lbl = QLabel("Indici (max 5):")
+        lbl.setStyleSheet("color:#374151;")
+        ctrl_layout.addWidget(lbl, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.selector_button = QPushButton("Scegli indici")
+        self.selector_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.selector_button.setStyleSheet("padding:6px 12px; border:1px solid #d1d5db; border-radius:8px; background:#f8fafc;")
+        self.selector_menu = QMenu(self.selector_button)
+        self.selector_button.setMenu(self.selector_menu)
+        ctrl_layout.addWidget(self.selector_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self.selection_summary = QLabel("")
+        self.selection_summary.setStyleSheet("color:#1f2937; font-size:12px;")
+        self.selection_summary.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        ctrl_layout.addWidget(self.selection_summary, 1, Qt.AlignmentFlag.AlignVCenter)
+
+        lay.addWidget(controls)
+
+        self._build_index_menu()
+        self._update_selection_summary()
 
         self.fig = Figure(figsize=(6, 2.8), dpi=100)
         self.canvas = FigureCanvas(self.fig)
@@ -96,34 +161,63 @@ class FinanceChart(QWidget):
 
     # ---------- API ----------
     def set_event_dates(self, dates: Iterable[datetime]) -> None:
-        """Ridisegna in base alle date evento."""
+        """Aggiorna il grafico memorizzando le date evento correnti."""
+        ds = sorted({d.date() if isinstance(d, datetime) else d for d in dates})
+        self._last_event_dates = ds
+        self._draw_chart()
+
+    def _draw_chart(self) -> None:
         self.fig.clear()
         self._scatters.clear()
-        ax = self.fig.add_subplot(111)
 
-        # Date evento
-        ds = sorted({d.date() if isinstance(d, datetime) else d for d in dates})
-        if not ds:
+        ax = self.fig.add_subplot(111)
+        ax.set_facecolor("#fcfcfd")
+        for side in ("top", "right"):
+            ax.spines[side].set_visible(False)
+        for side in ("left", "bottom"):
+            ax.spines[side].set_color("#e5e7eb")
+        ax.grid(True, which="major", alpha=0.25)
+        ax.tick_params(axis="both", labelsize=10)
+
+        if not self._last_event_dates:
+            ax.axhline(0, linewidth=1, linestyle="--", alpha=0.45, color="#94a3b8")
             self.status.setText("Nessuna data evento disponibile.")
             self.canvas.draw_idle()
+            self._annot = ax.annotate(
+                "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
+                fontsize=9
+            )
+            self._annot.set_visible(False)
             return
 
-        event_idx = pd.to_datetime(ds)
+        if not self.selected_names:
+            ax.axhline(0, linewidth=1, linestyle="--", alpha=0.45, color="#94a3b8")
+            self.status.setText("Seleziona almeno un indice (max 5) dal menu sopra il grafico.")
+            self.canvas.draw_idle()
+            self._annot = ax.annotate(
+                "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
+                fontsize=9
+            )
+            self._annot.set_visible(False)
+            return
+
+        event_idx = pd.to_datetime(self._last_event_dates)
         today_ts = pd.Timestamp(datetime.now().date())
         past_idx = event_idx[event_idx <= today_ts]
         future_idx = event_idx[event_idx > today_ts]
 
-        # Intervallo download storico
-        start = min(ds[0] - timedelta(days=7), (today_ts - pd.DateOffset(years=10)).date())
-        end   = max(ds[-1], today_ts.date()) + timedelta(days=7)
+        start = min(self._last_event_dates[0] - timedelta(days=7), (today_ts - pd.DateOffset(years=10)).date())
+        end = max(self._last_event_dates[-1], today_ts.date()) + timedelta(days=7)
 
-        # Scarica prezzi
+        selected_map = {name: self.available_indexes[name] for name in self.selected_names}
+
         try:
-            tickers = list(self.indexes.values())
             data = yf.download(
-                tickers=tickers,
+                tickers=list(selected_map.values()),
                 start=start.isoformat(),
-                end=(end + timedelta(days=1)).isoformat(),  # end esclusa
+                end=(end + timedelta(days=1)).isoformat(),
                 auto_adjust=False,
                 progress=False,
                 group_by="ticker",
@@ -132,109 +226,190 @@ class FinanceChart(QWidget):
         except Exception as e:
             self.status.setText(f"Errore download dati: {e}")
             self.canvas.draw_idle()
+            self._annot = ax.annotate(
+                "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
+                fontsize=9
+            )
+            self._annot.set_visible(False)
             return
 
         if data is None or len(data) == 0:
             self.status.setText("Nessun dato scaricato.")
             self.canvas.draw_idle()
+            self._annot = ax.annotate(
+                "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
+                bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
+                fontsize=9
+            )
+            self._annot.set_visible(False)
             return
 
-        # DataFrame prezzi (Adj Close) colonne = nomi umani
         try:
             adj = {}
-            for name, ticker in self.indexes.items():
+            for name, ticker in selected_map.items():
                 try:
-                    ser = data[ticker]['Adj Close']
+                    ser = data[ticker]["Adj Close"]
                 except Exception:
-                    ser = data['Adj Close'][ticker]
+                    ser = data["Adj Close"][ticker]
                 adj[name] = ser
             prices = pd.DataFrame(adj).sort_index()
         except Exception:
             if isinstance(data.columns, pd.MultiIndex):
-                prices = data.xs('Adj Close', axis=1, level=1)
-                rename_map = {v: k for k, v in self.indexes.items()}
+                prices = data.xs("Adj Close", axis=1, level=1)
+                rename_map = {v: k for k, v in selected_map.items()}
                 prices.rename(columns=rename_map, inplace=True)
             else:
                 self.status.setText("Formato dati inaspettato (niente Adj Close).")
                 self.canvas.draw_idle()
+                self._annot = ax.annotate(
+                    "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
+                    bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
+                    fontsize=9
+                )
+                self._annot.set_visible(False)
                 return
 
         prices = prices.ffill()
+        expanded_index = prices.index.union(event_idx).union(pd.DatetimeIndex([today_ts]))
+        aligned = prices.reindex(expanded_index).ffill()
+        base_row = aligned.loc[event_idx[0]]
 
-        # Base di normalizzazione = prezzo alla prima data evento
-        base_row = prices.reindex(prices.index.union(event_idx)).ffill().loc[event_idx[0]]
+        for name in aligned.columns:
+            if name not in selected_map:
+                continue
+            base_price = float(base_row.get(name, float("nan")))
+            if not np.isfinite(base_price) or base_price <= 0:
+                continue
 
-        # Disegna per ciascun indice
-        for name in prices.columns:
-            color = INDEX_COLORS.get(name, None)
-            label_used = False
+            color = INDEX_COLORS.get(name)
+            today_price = float(aligned.loc[today_ts, name])
+            y_today = (today_price / base_price - 1.0) * 100.0
 
-            # passato (linea piena)
+            line_x: List[pd.Timestamp] = []
+            line_y: List[float] = []
             if len(past_idx) > 0:
-                past_series = prices.reindex(prices.index.union(past_idx)).ffill().loc[past_idx, name]
-                y_past = (past_series / base_row[name] - 1.0) * 100.0
-                ax.plot(past_idx, y_past.values.astype(float), linewidth=2, label=name, color=color)
-                label_used = True
-            else:
-                y_past = pd.Series(dtype=float)
+                past_vals = aligned.loc[past_idx, name]
+                line_x = list(past_idx)
+                line_y = list(((past_vals / base_price - 1.0) * 100.0).astype(float))
 
-            # futuro (CAGR-X) in tratteggio
+            if today_ts >= event_idx[0]:
+                if not line_x or line_x[-1] != today_ts:
+                    line_x.append(today_ts)
+                    line_y.append(y_today)
+
+            label_used = False
+            if line_x:
+                ax.plot(line_x, line_y, linewidth=2, color=color, label=name)
+                label_used = True
+
+            y_future_prices = pd.Series(dtype=float)
             if len(future_idx) > 0:
                 hist_for_model = prices[name].dropna()
-                y_future_prices = forecast_cagrx_from_yfinance(hist_for_model, future_idx, lookback_years=5, macro_years=5)
-                y_future = (y_future_prices / base_row[name] - 1.0) * 100.0
+                try:
+                    y_future_prices = forecast_cagrx_from_yfinance(hist_for_model, future_idx, lookback_years=5, macro_years=5)
+                except Exception:
+                    y_future_prices = pd.Series(dtype=float)
 
-                if len(y_past) > 0:
-                    x_dash = [past_idx[-1]] + list(future_idx)
-                    y_dash = [float(y_past.iloc[-1])] + list(y_future.values.astype(float))
-                else:
-                    x_dash = list(future_idx)
-                    y_dash = list(y_future.values.astype(float))
+                if not y_future_prices.empty:
+                    y_future = y_future_prices.reindex(future_idx)
+                    y_future = y_future.fillna(method="ffill").fillna(method="bfill")
+                    y_future = (y_future / base_price - 1.0) * 100.0
+                    dash_x = [today_ts] + list(future_idx)
+                    dash_y = [y_today] + list(y_future.values.astype(float))
+                    ax.plot(dash_x, dash_y, linewidth=2, linestyle="--",
+                            color=color, label=(name if not label_used else "_nolegend_"))
+                elif not label_used:
+                    ax.plot([today_ts], [y_today], linewidth=2, color=color, label=name)
+                    label_used = True
+            elif not label_used:
+                ax.plot([today_ts], [y_today], linewidth=2, color=color, label=name)
+                label_used = True
 
-                ax.plot(x_dash, y_dash, linewidth=2, linestyle="--",
-                        label=(name if not label_used else "_nolegend_"), color=color)
-
-            # marker + tooltip su TUTTI gli eventi (passati + previsti)
+            # punti evento
             y_all = []
             for d in event_idx:
-                if len(past_idx) > 0 and d in past_idx:
-                    val = prices.reindex(prices.index.union([d])).ffill().loc[d, name]
-                    y_all.append(float((val / base_row[name] - 1.0) * 100.0))
+                if d <= today_ts:
+                    price = float(aligned.loc[d, name])
+                    y_all.append(float((price / base_price - 1.0) * 100.0))
                 else:
-                    # per futuro, usa la proiezione
-                    pred_val = y_future_prices.loc[d] if len(future_idx) > 0 and d in future_idx and d in y_future_prices.index else None
+                    pred_val = None
+                    if not y_future_prices.empty and d in y_future_prices.index:
+                        pred_val = float(y_future_prices.loc[d])
                     if pred_val is not None:
-                        y_all.append(float((pred_val / base_row[name] - 1.0) * 100.0))
+                        y_all.append(float((pred_val / base_price - 1.0) * 100.0))
                     else:
-                        y_all.append(float(y_past.iloc[-1]) if len(y_past) > 0 else 0.0)
+                        y_all.append(y_today)
 
             sc = ax.scatter(event_idx, y_all, s=30, color=color, edgecolor="#0f172a", linewidths=0.5)
             self._scatters.append((sc, {"name": name, "x": event_idx.to_pydatetime(), "y": y_all}))
 
-        # look & feel
-        ax.axhline(0, linewidth=1, linestyle="--", alpha=0.5, color="#94a3b8")
-        ax.grid(True, which="major", alpha=0.25)
+            today_point = ax.scatter([today_ts], [y_today], s=52, color=TODAY_COLOR_HEX,
+                                      edgecolor="#0f172a", linewidths=0.8, zorder=5)
+            self._scatters.append((today_point, {
+                "name": f"{name} (oggi)",
+                "x": [today_ts.to_pydatetime()],
+                "y": [float(y_today)],
+            }))
+
+        ax.axhline(0, linewidth=1, linestyle="--", alpha=0.45, color="#94a3b8")
         ax.set_ylabel("Variazione % da prima data")
         ax.set_xlabel("Date evento")
-        ax.legend(ncols=2, fontsize=9, frameon=False, loc="upper left")
+        handles, labels = ax.get_legend_handles_labels()
+        if handles:
+            ax.legend(handles, labels, ncols=2, fontsize=9, frameon=False, loc="upper left")
 
-        self.fig.tight_layout()
         self.canvas.draw_idle()
 
+        sel_summary = ", ".join(self.selected_names) if self.selected_names else "—"
         self.status.setText(
-            f"Intervallo: {ds[0].isoformat()} — {ds[-1].isoformat()} | "
-            f"Indici: {', '.join(self.indexes.keys())} | "
-            f"Futuro: modello CAGR-X (proxy Yahoo, tratteggiato)"
+            f"Intervallo: {self._last_event_dates[0].isoformat()} — {self._last_event_dates[-1].isoformat()} | "
+            f"Indici selezionati: {sel_summary} | Punto oggi: {today_ts.date().isoformat()} | "
+            "Futuro: modello CAGR-X (proxy Yahoo, tratteggiato)"
         )
 
-        # Annotazione condivisa per hover
-        ax = self.fig.axes[0]
         self._annot = ax.annotate(
             "", xy=(0, 0), xytext=(8, 10), textcoords="offset points",
             bbox=dict(boxstyle="round,pad=0.3", fc="white", ec="#cbd5e1", lw=0.8, alpha=0.97),
             fontsize=9
         )
         self._annot.set_visible(False)
+
+    def _build_index_menu(self) -> None:
+        self.selector_menu.clear()
+        self._index_actions.clear()
+        for name in self.available_indexes:
+            action = QAction(name, self.selector_menu)
+            action.setCheckable(True)
+            action.setChecked(name in self.selected_names)
+            action.toggled.connect(lambda checked, n=name: self._on_index_toggled(n, checked))
+            self.selector_menu.addAction(action)
+            self._index_actions[name] = action
+
+    def _update_selection_summary(self) -> None:
+        if self.selected_names:
+            self.selection_summary.setText(", ".join(self.selected_names))
+        else:
+            self.selection_summary.setText("Nessun indice selezionato")
+
+    def _on_index_toggled(self, name: str, checked: bool) -> None:
+        if checked:
+            if name not in self.selected_names:
+                if len(self.selected_names) >= MAX_SELECTED_INDEXES:
+                    action = self._index_actions.get(name)
+                    if action is not None:
+                        action.blockSignals(True)
+                        action.setChecked(False)
+                        action.blockSignals(False)
+                    self.status.setText(f"Puoi selezionare al massimo {MAX_SELECTED_INDEXES} indici.")
+                    return
+                self.selected_names.append(name)
+        else:
+            if name in self.selected_names:
+                self.selected_names.remove(name)
+
+        self._update_selection_summary()
+        self._draw_chart()
 
     # ---------- Hover: mostra % al passaggio sui pallini ----------
     def _on_hover(self, event):
