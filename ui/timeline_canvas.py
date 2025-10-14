@@ -47,6 +47,9 @@ LABEL_MAX_W_VW_RATIO = 0.14
 # Sfondo colorato delle bubble (trasparenza)
 BUBBLE_BG_ALPHA = 0.16
 
+# Distanza minima in pixel tra i pallini (centro-centro)
+MIN_DOT_SPACING_PX = 40
+
 
 def color_for(cat: str | None) -> QColor:
     key = (cat or "").strip().lower()
@@ -226,10 +229,20 @@ class TimelineCanvas(QGraphicsView):
         }
         next_side: Literal["above", "below"] = "above"
 
+        # Per garantire una distanza minima orizzontale tra i pallini
+        last_dot_x: Optional[float] = None
+
         for ev in self.events:
             x_nom = x_from_dt(ev.dt)
-            x = max(float(safe_pad) + icon_size / 2,
-                    min(float(vw - safe_pad) - icon_size / 2, x_nom))
+            min_x = float(safe_pad) + icon_size / 2
+            max_x = float(vw - safe_pad) - icon_size / 2
+            x = max(min_x, min(max_x, x_nom))
+
+            # Enforce distanza minima tra i pallini
+            if last_dot_x is not None:
+                if x < last_dot_x + MIN_DOT_SPACING_PX:
+                    x = min(max_x, last_dot_x + MIN_DOT_SPACING_PX)
+            last_dot_x = x
 
             # Marker icona/cerchio
             marker_top = max(safe_pad, min(vh - safe_pad - icon_size, y0 - icon_size / 2))
