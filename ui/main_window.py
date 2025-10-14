@@ -274,8 +274,8 @@ class MainWindow(QMainWindow):
             self.person_combo.setEnabled(False)
             self.status_badge.setText("Caricato: 0 persone")
             self.finance_chart.set_event_dates([])
-            self.compound.set_start_date(None)
             self.compound.set_event_points([])
+            self.compound.set_start_date(None)
             return
 
         per_persona = defaultdict(int)
@@ -318,14 +318,14 @@ class MainWindow(QMainWindow):
             self.status_badge.setText("Caricato: 0 eventi per questa persona")
             self.canvas.set_events([])
             self.finance_chart.set_event_dates([])
-            self.compound.set_start_date(None)
             self.compound.set_event_points([])
+            self.compound.set_start_date(None)
             return
 
         # Timeline
         self.canvas.set_events(sub)
         # Finance chart
         self.finance_chart.set_event_dates([e.dt for e in sub])
-        # Compound interest: prima data + (data, titolo) per marker/etichette
-        self.compound.set_start_date(sub[0].dt)
+        # Compound interest: (data, titolo) per marker/etichette + data di partenza
         self.compound.set_event_points([(e.dt, e.titolo or "") for e in sub])
+        self.compound.set_start_date(sub[0].dt)
