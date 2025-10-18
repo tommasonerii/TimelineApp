@@ -5,7 +5,7 @@ import os
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QComboBox, QMessageBox, QSizePolicy,
-    QFrame, QScrollArea, QListView
+    QFrame, QScrollArea, QListView, QCompleter
 )
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QFont
@@ -188,6 +188,15 @@ class MainWindow(QMainWindow):
         self.person_combo.setMinimumContentsLength(18)
         self.person_combo.setToolTip("Seleziona la persona")
         self.person_combo.setView(QListView())  # popup arrotondato
+        self.person_combo.setEditable(True)
+        self.person_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        line_edit = self.person_combo.lineEdit()
+        line_edit.setClearButtonEnabled(True)
+        line_edit.setPlaceholderText("Cerca persona…")
+        self.person_completer = QCompleter(self.person_combo.model(), self.person_combo)
+        self.person_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self.person_completer.setFilterMode(Qt.MatchFlag.MatchContains)
+        self.person_combo.setCompleter(self.person_completer)
         pw.addWidget(lbl_person, 0, Qt.AlignmentFlag.AlignVCenter)
         pw.addWidget(self.person_combo, 0, Qt.AlignmentFlag.AlignVCenter)
         chip_person = make_chip(person_wrap)
@@ -287,6 +296,9 @@ class MainWindow(QMainWindow):
         self.person_combo.clear()
         self.person_combo.addItems(persone)
         self.person_combo.setEnabled(True)
+        self.person_combo.lineEdit().clear()
+        if self.person_combo.completer() is not None:
+            self.person_combo.completer().setModel(self.person_combo.model())
         self.person_combo.blockSignals(False)
 
         self.person_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
