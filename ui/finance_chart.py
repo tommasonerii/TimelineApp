@@ -404,7 +404,8 @@ class FinanceChart(QWidget):
 
                 if not y_future_prices.empty:
                     y_future = y_future_prices.reindex(future_idx)
-                    y_future = y_future.fillna(method="ffill").fillna(method="bfill")
+                    # Pandas deprecated fillna(method=...) → use ffill()/bfill()
+                    y_future = y_future.ffill().bfill()
                     y_future = (y_future / base_price - 1.0) * 100.0
                     dash_x = [today_ts] + list(future_idx)
                     dash_y = [y_today] + list(y_future.values.astype(float))

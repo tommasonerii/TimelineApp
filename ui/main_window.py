@@ -8,7 +8,7 @@ from PyQt6.QtWidgets import (
     QFrame, QScrollArea, QListView, QCompleter
 )
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QFont
+from PyQt6.QtGui import QFont, QColor, QPalette
 
 from core.io_csv import load_events_csv
 from .styles import STYLE_LIGHT
@@ -19,7 +19,7 @@ from .font_utils import load_lato_family
 
 
 # ------ Chip layout constants ------
-CHIP_HEIGHT = 42
+CHIP_HEIGHT = 56
 CHIP_RADIUS = 12
 
 
@@ -35,7 +35,7 @@ def make_chip(inner: QWidget) -> QFrame:
         }}
     """)
     lay = QHBoxLayout(chip)
-    lay.setContentsMargins(12, 6, 12, 6)
+    lay.setContentsMargins(12, 8, 12, 8)
     lay.setSpacing(8)
     lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
     lay.addWidget(inner, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -72,6 +72,10 @@ class MainWindow(QMainWindow):
         self.font_family, _ = load_lato_family(fallback_family="Arial")
         self.setFont(QFont(self.font_family, 10))
 
+        # === Percorso asset icone (chevron giù per combo Persona) ===
+        assets_icons = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "icons")
+        chevron_down_path = os.path.abspath(os.path.join(assets_icons, "chevron-down.svg")).replace('\\', '/')
+
         # === Stile globale (combo moderno + scrollbar verticale moderna) ===
         self.setStyleSheet(STYLE_LIGHT + f"""
             QMainWindow, QWidget {{ background-color: #ffffff; font-family: "{self.font_family}"; }}
@@ -98,9 +102,10 @@ class MainWindow(QMainWindow):
             QComboBox#PersonCombo {{
                 background: #fcfcfd;
                 border: 1px solid #e5e7eb;
-                border-radius: 10px;
+                border-radius: {CHIP_RADIUS}px;
                 padding: 8px 36px 8px 12px;
                 color: #111;
+                min-height: 20px;
             }}
             QComboBox#PersonCombo:hover {{
                 background: #f7f7f9;
@@ -113,12 +118,15 @@ class MainWindow(QMainWindow):
                 color: #9aa3af;
                 background: #f3f4f6;
             }}
-            QComboBox#PersonCombo::drop-down {{ border: none; width: 28px; }}
+            QComboBox#PersonCombo::drop-down {{
+                border: none;
+                width: 28px;
+                subcontrol-origin: padding;
+                subcontrol-position: top right;
+            }}
             QComboBox#PersonCombo::down-arrow {{
-                image: none; width: 0; height: 0;
-                border-left: 6px solid transparent;
-                border-right: 6px solid transparent;
-                border-top: 7px solid #6b7280;
+                image: url("{chevron_down_path}");
+                width: 14px; height: 14px;
                 margin-right: 10px;
             }}
             /* Popup del combo */
@@ -126,14 +134,18 @@ class MainWindow(QMainWindow):
                 background: #ffffff;
                 border: 1px solid #e5e7eb;
                 border-radius: 10px;
-                padding: 6px 0;
+                padding: 4px 0;
                 outline: none;
                 selection-background-color: #eef2f7;
                 selection-color: #111;
             }}
             QComboBox#PersonCombo QAbstractItemView::item {{
-                min-height: 28px;
-                padding: 6px 10px;
+                min-height: 34px;
+                padding: 8px 12px;
+            }}
+            QComboBox#PersonCombo QLineEdit {{
+                padding-top: 2px; padding-bottom: 2px;
+                margin: 0px;
             }}
 
             /* ===== SCROLLBAR VERTICALE (solo area centrale) ===== */
@@ -185,18 +197,56 @@ class MainWindow(QMainWindow):
         self.person_combo.setEnabled(False)
         self.person_combo.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.person_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        # Allinea l'altezza del combo all'interno del chip
+        try:
+            self.person_combo.setFixedHeight(CHIP_HEIGHT - 16)  # chip margins top+bottom = 8+8
+        except Exception:
+            pass
         self.person_combo.setMinimumContentsLength(18)
         self.person_combo.setToolTip("Seleziona la persona")
         self.person_combo.setView(QListView())  # popup arrotondato
         self.person_combo.setEditable(True)
         self.person_combo.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
         line_edit = self.person_combo.lineEdit()
-        line_edit.setClearButtonEnabled(True)
+        # Rimuovi la X di cancellazione dal campo di ricerca
+        line_edit.setClearButtonEnabled(False)
         line_edit.setPlaceholderText("Cerca persona…")
         self.person_completer = QCompleter(self.person_combo.model(), self.person_combo)
         self.person_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
         self.person_completer.setFilterMode(Qt.MatchFlag.MatchContains)
         self.person_combo.setCompleter(self.person_completer)
+        # Popup del completer con stile moderno coerente
+        comp_popup = QListView()
+        comp_popup.setObjectName("PersonPopup")
+        comp_popup.setStyleSheet(
+            """
+            QListView#PersonPopup {
+                background: #ffffff;
+                border: 1px solid #e5e7eb;
+                border-radius: 10px;
+                padding: 4px 0;
+                outline: none;
+                color: #111111; /* testo visibile */
+            }
+            QListView#PersonPopup::item {
+                min-height: 34px;
+                padding: 8px 12px;
+                color: #111111;
+            }
+            QListView#PersonPopup::item:selected {
+                background: #eef2f7;
+                color: #111;
+            }
+            QListView#PersonPopup::item:hover {
+                background: #f5f7fb;
+            }
+            """
+        )
+        pal = comp_popup.palette()
+        pal.setColor(QPalette.ColorRole.Text, QColor("#111111"))
+        pal.setColor(QPalette.ColorRole.Base, QColor("#ffffff"))
+        comp_popup.setPalette(pal)
+        self.person_completer.setPopup(comp_popup)
         pw.addWidget(lbl_person, 0, Qt.AlignmentFlag.AlignVCenter)
         pw.addWidget(self.person_combo, 0, Qt.AlignmentFlag.AlignVCenter)
         chip_person = make_chip(person_wrap)
