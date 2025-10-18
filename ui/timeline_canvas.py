@@ -2,7 +2,7 @@
 from __future__ import annotations
 from .font_utils import load_lato_family
 from typing import Dict, List, Optional, Literal
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 
 from PyQt6.QtCore import Qt, QRectF
 from PyQt6.QtGui import (
@@ -34,6 +34,12 @@ CATEGORY_COLORS: Dict[str, str] = {
 }
 DEFAULT_COLOR = "#C7884A"
 TODAY_COLOR   = QColor("#0f172a")
+EXPECTANCY_COLOR = QColor("#6366f1")  # viola
+
+# Aspettativa di vita (anni) modificabili
+LIFE_EXPECTANCY_YEARS_MALE   = 82
+LIFE_EXPECTANCY_YEARS_FEMALE = 86
+LIFE_EXPECTANCY_YEARS_OTHER  = 84
 
 # Font (scaling relativo all’altezza viewport)
 LABEL_VH_SCALE = 0.023
@@ -115,6 +121,7 @@ class TimelineCanvas(QGraphicsView):
         # Dati
         self.events: List[Event] = []
         self.icon_map: Dict[str, str] = {}
+        self.expectancy_dt: Optional[datetime] = None
 
         # Stile
         self.axis_color = QColor("#5b6570")
@@ -132,6 +139,34 @@ class TimelineCanvas(QGraphicsView):
 
     def set_events(self, events: List[Event]) -> None:
         self.events = sorted(events, key=lambda e: e.dt)
+        self._redraw_and_fit()
+
+    def set_expectancy(self, birth_dt: Optional[datetime], sex: Optional[str]) -> None:
+        """Imposta la data dell'aspettativa di vita dato sesso e data di nascita."""
+        self.expectancy_dt = None
+        if not birth_dt or not sex:
+            self._redraw_and_fit()
+            return
+
+        s = (sex or "").strip().lower()
+        if s.startswith("m") or s.startswith("uomo") or s.startswith("masc"):
+            years = LIFE_EXPECTANCY_YEARS_MALE
+        elif s.startswith("f") or s.startswith("donna") or s.startswith("femm"):
+            years = LIFE_EXPECTANCY_YEARS_FEMALE
+        else:
+            years = LIFE_EXPECTANCY_YEARS_OTHER
+
+        def _add_years(d: datetime, n: int) -> datetime:
+            try:
+                return d.replace(year=d.year + n)
+            except ValueError:
+                # gestione 29/02 → 28/02
+                if d.month == 2 and d.day == 29:
+                    return d.replace(year=d.year + n, month=2, day=28)
+                # fallback: aggiungi giorni approssimati
+                return d + timedelta(days=int(n * 365.25))
+
+        self.expectancy_dt = _add_years(birth_dt, years)
         self._redraw_and_fit()
 
     # ---------- Eventi Qt ----------
@@ -183,9 +218,12 @@ class TimelineCanvas(QGraphicsView):
         axis.setZValue(0.1)
         self.scene.addItem(axis)
 
-        # Range temporale con padding simmetrico
-        dt_min = self.events[0].dt
-        dt_max = self.events[-1].dt
+        # Range temporale con padding simmetrico (considera anche aspettativa se presente)
+        dates_for_range = [e.dt for e in self.events]
+        if self.expectancy_dt is not None:
+            dates_for_range.append(self.expectancy_dt)
+        dt_min = min(dates_for_range)
+        dt_max = max(dates_for_range)
         if dt_min == dt_max:
             dt_max = dt_min + timedelta(days=1)
         base_range_days = max((dt_max - dt_min).days, 1)
@@ -227,6 +265,31 @@ class TimelineCanvas(QGraphicsView):
             oggi_txt.setPos(txt_x, txt_y)
             oggi_txt.setZValue(0.3)
             self.scene.addItem(oggi_txt)
+
+        # "ASPETTATIVA"
+        if self.expectancy_dt is not None and dt_min_pad <= self.expectancy_dt <= dt_max_pad:
+            x_exp = x_from_dt(self.expectancy_dt)
+            r = today_size / 2
+            x_exp = max(safe_pad + r, min(vw - safe_pad - r, x_exp))
+
+            dot = QGraphicsEllipseItem(x_exp - r, y0 - r, 2 * r, 2 * r)
+            pen = QPen(EXPECTANCY_COLOR, max(2, int(vh * 0.005)))
+            dot.setPen(pen)
+            dot.setBrush(QBrush(EXPECTANCY_COLOR))
+            dot.setZValue(2.0)
+            dot.setToolTip(f"Aspettativa: {self.expectancy_dt:%Y-%m-%d}")
+            self.scene.addItem(dot)
+
+            txt = QGraphicsTextItem("ASPETTATIVA")
+            txt.setDefaultTextColor(QColor("#6b7280"))
+            txt.setFont(oggi_font)
+            rct = txt.boundingRect()
+            txt_x = max(safe_pad, min(vw - rct.width() - safe_pad, x_exp - rct.width() / 2))
+            txt_y = y0 + date_gap + 18
+            txt_y = max(safe_pad, min(vh - rct.height() - safe_pad, txt_y))
+            txt.setPos(txt_x, txt_y)
+            txt.setZValue(0.3)
+            self.scene.addItem(txt)
 
         last_label_rects: Dict[Literal["above", "below"], List[QRectF]] = {
             "above": [],

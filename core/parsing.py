@@ -96,6 +96,22 @@ def parse_personal_data(txt: str) -> Tuple[str, str]:
     return nome, cognome
 
 
+# Estrai anche Sesso e Data di Nascita
+SESSO_REGEX = re.compile(r"Sesso:\s*([^,\n]+)", re.IGNORECASE)
+NASCITA_REGEX = re.compile(r"Data\s+Di\s+Nascita:\s*([0-9]{1,4}[\/-][0-9]{1,2}[\/-][0-9]{2,4})", re.IGNORECASE)
+
+
+def parse_personal_details(txt: str) -> Dict[str, Optional[str]]:
+    """Ritorna dict: {nome, cognome, sesso, nascita_str} dal campo 'Dati Personali'."""
+    s = str(txt or "")
+    nome, cognome = parse_personal_data(s)
+    sesso_m = SESSO_REGEX.search(s)
+    nasc_m = NASCITA_REGEX.search(s)
+    sesso = (sesso_m.group(1).strip() if sesso_m else "")
+    nascita_str = (nasc_m.group(1).strip() if nasc_m else "")
+    return {"nome": nome, "cognome": cognome, "sesso": sesso, "nascita_str": nascita_str}
+
+
 # =====================
 # Parsing della data
 # =====================
@@ -129,4 +145,3 @@ def parse_date(date_str: str) -> Optional[datetime]:
         return datetime(y, m, d)
     except Exception:
         return None
-

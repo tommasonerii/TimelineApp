@@ -323,7 +323,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            self.events = load_events_csv(path)
+            self.events, self.people = load_events_csv(path)
         except Exception as e:
             QMessageBox.critical(self, "Errore", str(e))
             return
@@ -386,6 +386,15 @@ class MainWindow(QMainWindow):
 
         # Timeline
         self.canvas.set_events(sub)
+        # Imposta marker aspettativa di vita se disponibile per la persona
+        birth_dt = None
+        sex = ""
+        if hasattr(self, 'people') and self.people:
+            info = self.people.get(person)
+            if info:
+                birth_dt = getattr(info, 'nascita', None)
+                sex = getattr(info, 'sesso', '')
+        self.canvas.set_expectancy(birth_dt, sex)
         # Finance chart
         self.finance_chart.set_event_dates([e.dt for e in sub])
         # Compound interest: (data, titolo) per marker/etichette + data di partenza
