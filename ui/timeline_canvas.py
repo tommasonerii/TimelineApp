@@ -20,6 +20,11 @@ from core.models import Event
 #  PALETTE & COSTANTI
 # ===========================
 CATEGORY_COLORS: Dict[str, str] = {
+    # Nuove categorie principali
+    "bisogno":   "#ef4444",  # red-500
+    "progetto":  "#3b82f6",  # blue-500
+    "desiderio": "#10b981",  # emerald-500
+    # Retrocompatibilità (se arrivano ancora eventi legacy)
     "famiglia":   "#fa9f42",
     "finanze":    "#2b4162",
     "sogni":      "#0b6e4f",
@@ -232,6 +237,19 @@ class TimelineCanvas(QGraphicsView):
         # Per garantire una distanza minima orizzontale tra i pallini
         last_dot_x: Optional[float] = None
 
+        def months_until(start: datetime, end: datetime) -> int:
+            """Ritorna i mesi rimanenti da start (oggi) a end (evento), arrotondati per eccesso.
+            Minimo 0.
+            """
+            if end <= start:
+                return 0
+            ydiff = end.year - start.year
+            mdiff = end.month - start.month
+            months = ydiff * 12 + mdiff
+            if end.day > start.day:
+                months += 1  # conta il mese parziale come pieno
+            return max(0, months)
+
         for ev in self.events:
             x_nom = x_from_dt(ev.dt)
             min_x = float(safe_pad) + icon_size / 2
@@ -250,7 +268,21 @@ class TimelineCanvas(QGraphicsView):
                 self._draw_circle(x, marker_top, ev, icon_size, is_future=(ev.dt > now))
 
             # ------- Etichetta centrata -------
-            label_text = (ev.titolo or "").upper()
+            title_text = (ev.titolo or "").upper()
+            # Delta temporale solo per eventi futuri
+            delta_text = ""
+            if ev.dt > now:
+                mleft = months_until(now, ev.dt)
+                if mleft >= 12:
+                    years = mleft // 12
+                    unit = "anno" if years == 1 else "anni"
+                    delta_text = f"\nTra: {years} {unit}"
+                else:
+                    mdisp = max(1, mleft)
+                    unit = "mese" if mdisp == 1 else "mesi"
+                    delta_text = f"\nTra: {mdisp} {unit}"
+
+            label_text = f"{title_text}{delta_text}"
             label = QGraphicsTextItem()
             label.setDefaultTextColor(self.label_color)
             label.setFont(title_font)
