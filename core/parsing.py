@@ -20,6 +20,13 @@ EVENTI_REGEX_V2 = re.compile(
     re.IGNORECASE,
 )
 
+# v3 (nuovo con campo A Carico? e Nome del Familiare A Carico):
+#   Titolo Evento: ..., Categoria: ..., Data Evento: ..., A Carico?: Si/No, Nome del Familiare A Carico: <nome|vuoto>
+EVENTI_REGEX_V3 = re.compile(
+    r"Titolo\s*Evento:\s*([^,\n]+?),\s*Categoria:\s*([^,\n]+?),\s*Data\s*Evento:\s*([0-9]{1,4}[\/-][0-9]{1,2}[\/-][0-9]{2,4}),\s*A\s*Carico\?:\s*([^,\n]+?),\s*Nome\s+del\s+Familiare\s+A\s+Carico:\s*([^\n,]*)",
+    re.IGNORECASE,
+)
+
 
 def _norm_cat(cat: str) -> str:
     """Normalizza categorie su {bisogno, progetto, desiderio} (fallback: originale)."""
@@ -47,29 +54,84 @@ def _norm_cat(cat: str) -> str:
 
 def parse_eventi_field(txt: str) -> List[Dict[str, str]]:
     """
-    Estrae una lista di dict {Titolo, Categoria, DataEvento} dal campo testuale 'Eventi'.
-    Supporta sia il formato legacy (Titolo/Categoria/Data) sia il nuovo
-    (Titolo Evento/Categoria/Data Evento[, Nome del Familiare]).
+    Estrae una lista di dict {Titolo, Categoria, DataEvento, Familiare, Acarico} dal
+    campo testuale 'Eventi', trattando ogni riga interna come un evento.
+    Ordine e spaziatura dei campi sono tolleranti.
     """
     out: List[Dict[str, str]] = []
     if not txt:
         return out
 
-    s = str(txt)
-    matches_v2 = list(EVENTI_REGEX_V2.finditer(s))
-    matches_v1 = [] if matches_v2 else list(EVENTI_REGEX_V1.finditer(s))
-    matches = matches_v2 or matches_v1
+    for raw_line in str(txt).splitlines():
+        line = raw_line.strip().strip(',')
+        if not line:
+            continue
 
-    for m in matches:
+        parsed = _parse_event_line_strict(line)
+        if not parsed:
+            parsed = _parse_event_line_flexible(line)
+        if parsed:
+            out.append(parsed)
+    return out
+
+
+def _parse_event_line_strict(line: str) -> Optional[Dict[str, object]]:
+    # prova v3
+    m = EVENTI_REGEX_V3.search(line)
+    if m:
         titolo = (m.group(1) or "").strip()
         categoria = _norm_cat(m.group(2) or "")
         data_ev = (m.group(3) or "").strip()
-        out.append({
-            "Titolo": titolo,
-            "Categoria": categoria,
-            "DataEvento": data_ev,
-        })
-    return out
+        acarico_raw = (m.group(4) or "").strip().lower()
+        fam = (m.group(5) or "").strip()
+        yes_vals = {"si", "sì", "yes", "y", "true", "1"}
+        is_dep = acarico_raw in yes_vals
+        return {"Titolo": titolo, "Categoria": categoria, "DataEvento": data_ev, "Familiare": fam if is_dep else "", "Acarico": is_dep}
+    # prova v2
+    m = EVENTI_REGEX_V2.search(line)
+    if m:
+        titolo = (m.group(1) or "").strip()
+        categoria = _norm_cat(m.group(2) or "")
+        data_ev = (m.group(3) or "").strip()
+        fam = (m.group(4) or "").strip() if getattr(m.re, 'groups', 0) >= 4 else ""
+        return {"Titolo": titolo, "Categoria": categoria, "DataEvento": data_ev, "Familiare": fam, "Acarico": bool(fam)}
+    # prova v1
+    m = EVENTI_REGEX_V1.search(line)
+    if m:
+        titolo = (m.group(1) or "").strip()
+        categoria = _norm_cat(m.group(2) or "")
+        data_ev = (m.group(3) or "").strip()
+        return {"Titolo": titolo, "Categoria": categoria, "DataEvento": data_ev, "Familiare": "", "Acarico": False}
+    return None
+
+
+def _parse_event_line_flexible(line: str) -> Optional[Dict[str, object]]:
+    def norm_key(k: str) -> str:
+        return (k or '').strip().lower().replace('  ', ' ')
+
+    yes_vals = {"si", "sì", "yes", "y", "true", "1"}
+    # estrae key:value separati da virgola nella stessa riga
+    pairs = re.findall(r"([^:]+):\s*([^,]*)", line)
+    if not pairs:
+        return None
+    d: Dict[str, str] = {}
+    for k, v in pairs:
+        d[norm_key(k)] = v.strip()
+
+    titolo = d.get("titolo evento") or d.get("titolo") or ""
+    cat = d.get("categoria") or ""
+    data_ev = d.get("data evento") or d.get("data") or ""
+    acar = d.get("a carico?") or ""
+    fam = d.get("nome del familiare a carico") or d.get("nome del familiare") or ""
+    if not (titolo and cat and data_ev):
+        return None
+    return {
+        "Titolo": titolo.strip(),
+        "Categoria": _norm_cat(cat),
+        "DataEvento": data_ev.strip(),
+        "Familiare": fam.strip() if (acar or '').strip().lower() in yes_vals else "",
+        "Acarico": (acar or '').strip().lower() in yes_vals,
+    }
 
 
 # ============================
@@ -133,15 +195,17 @@ def parse_date(date_str: str) -> Optional[datetime]:
         return None
     a, b, c = map(int, parts)
     try:
-        if a > 999:          # YYYY-M-D
+        # Preferisci D-M-Y quando l'ultimo è l'anno
+        if c > 999:
+            d, m, y = a, b, c
+        elif a > 999:  # YYYY-M-D
             y, m, d = a, b, c
-        elif c > 999:        # D/M/YYYY oppure M/D/YYYY
-            if a > 12:       # D/M/YYYY
-                d, m, y = a, b, c
-            else:            # M/D/YYYY
-                m, d, y = a, b, c
         else:
-            return None
+            # fallback euristico: se b è un mese valido → D/M/Y
+            if 1 <= b <= 12:
+                d, m, y = a, b, c
+            else:
+                return None
         return datetime(y, m, d)
     except Exception:
         return None

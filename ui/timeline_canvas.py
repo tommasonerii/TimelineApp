@@ -122,6 +122,7 @@ class TimelineCanvas(QGraphicsView):
         self.events: List[Event] = []
         self.icon_map: Dict[str, str] = {}
         self.expectancy_dt: Optional[datetime] = None
+        self.dep_color_map: Dict[str, QColor] = {}
 
         # Stile
         self.axis_color = QColor("#5b6570")
@@ -139,6 +140,24 @@ class TimelineCanvas(QGraphicsView):
 
     def set_events(self, events: List[Event]) -> None:
         self.events = sorted(events, key=lambda e: e.dt)
+        # Costruisci la mappa colori per i familiari a carico
+        self.dep_color_map.clear()
+        palette = [
+            QColor("#f59e0b"),  # amber-500
+            QColor("#8b5cf6"),  # violet-500
+            QColor("#ef4444"),  # red-500
+            QColor("#10b981"),  # emerald-500
+            QColor("#3b82f6"),  # blue-500
+            QColor("#ec4899"),  # pink-500
+            QColor("#22c55e"),  # green-500
+            QColor("#06b6d4"),  # cyan-500
+        ]
+        idx = 0
+        for ev in self.events:
+            fam = (getattr(ev, 'familiare', '') or '').strip()
+            if fam and fam not in self.dep_color_map:
+                self.dep_color_map[fam] = palette[idx % len(palette)]
+                idx += 1
         self._redraw_and_fit()
 
     def set_expectancy(self, birth_dt: Optional[datetime], sex: Optional[str]) -> None:
@@ -299,6 +318,8 @@ class TimelineCanvas(QGraphicsView):
 
         # Per garantire una distanza minima orizzontale tra i pallini
         last_dot_x: Optional[float] = None
+        # Alternanza distanza verticale etichette per lato
+        alt_toggle = {"above": False, "below": False}
 
         def months_until(start: datetime, end: datetime) -> int:
             """Ritorna i mesi rimanenti da start (oggi) a end (evento), arrotondati per eccesso.
@@ -319,16 +340,10 @@ class TimelineCanvas(QGraphicsView):
             max_x = float(vw - safe_pad) - icon_size / 2
             x = max(min_x, min(max_x, x_nom))
 
-            # Enforce distanza minima tra i pallini
-            if last_dot_x is not None:
-                if x < last_dot_x + MIN_DOT_SPACING_PX:
-                    x = min(max_x, last_dot_x + MIN_DOT_SPACING_PX)
-            last_dot_x = x
-
-            # Marker icona/cerchio
-            marker_top = max(safe_pad, min(vh - safe_pad - icon_size, y0 - icon_size / 2))
-            if not self._try_draw_icon(x, marker_top, ev, icon_size, is_future=(ev.dt > now)):
-                self._draw_circle(x, marker_top, ev, icon_size, is_future=(ev.dt > now))
+            # Enforce distanza minima tra i pallini: metà larghezza max etichetta +10%
+            dot_spacing = float(int(max_label_w * 0.55))
+            if last_dot_x is not None and x < last_dot_x + dot_spacing:
+                x = min(max_x, last_dot_x + dot_spacing)
 
             # ------- Etichetta centrata -------
             title_text = (ev.titolo or "").upper()
@@ -372,24 +387,23 @@ class TimelineCanvas(QGraphicsView):
 
             bx = max(float(safe_pad), min(float(vw - bw - safe_pad), x - bw / 2))
 
-            above_rect = QRectF(bx, y0 - label_gap - bh, bw, bh)
-            below_rect = QRectF(bx, y0 + label_gap,   bw, bh)
+            # Alterna la distanza verticale etichetta ↔ pallino per ridurre collisioni
+            gap_above = int(label_gap * (1.6 if alt_toggle["above"] else 1.0))
+            gap_below = int(label_gap * (1.6 if alt_toggle["below"] else 1.0))
+            above_rect = QRectF(bx, y0 - gap_above - bh, bw, bh)
+            below_rect = QRectF(bx, y0 + gap_below,   bw, bh)
 
-            preferred_side = next_side
-            alternate_side = "below" if preferred_side == "above" else "above"
+            # Impone lato: capofamiglia sopra (is_dependent False), familiari a carico sotto
+            is_dep = bool(getattr(ev, 'is_dependent', False))
+            forced_side = "below" if is_dep else "above"
+            preferred_side = forced_side
+            alternate_side = forced_side  # nessuna alternanza
 
             def _has_overlap(rect: QRectF, items: List[QRectF]) -> bool:
                 return any(rect.intersects(other) for other in items)
 
             candidates = {"above": above_rect, "below": below_rect}
             side = preferred_side
-            if _has_overlap(candidates[side], last_label_rects[side]):
-                if not _has_overlap(candidates[alternate_side], last_label_rects[alternate_side]):
-                    side = alternate_side
-                else:
-                    overlap_pref = self._overlap_amount(candidates[side], last_label_rects[side])
-                    overlap_alt = self._overlap_amount(candidates[alternate_side], last_label_rects[alternate_side])
-                    side = alternate_side if overlap_alt < overlap_pref else preferred_side
 
             bubble_rect = candidates[side]
             bubble_rect = QRectF(
@@ -407,12 +421,22 @@ class TimelineCanvas(QGraphicsView):
                 preferred_center=float(x),
             )
 
+            # X finale deciso: aggiorna il riferimento e disegna il marker
+            last_dot_x = x
+
+            # Toggle alternanza per il lato usato
+            alt_toggle[side] = not alt_toggle[side]
+
+            # Marker icona/cerchio dopo aver fissato X
+            marker_top = max(safe_pad, min(vh - safe_pad - icon_size, y0 - icon_size / 2))
+            if not self._try_draw_icon(x, marker_top, ev, icon_size, is_future=(ev.dt > now)):
+                self._draw_circle(x, marker_top, ev, icon_size, is_future=(ev.dt > now))
+
             last_label_rects[side].append(bubble_rect)
-            next_side = "below" if side == "above" else "above"
 
             # Bubble
-            cat_color = color_for(ev.categoria)
-            bubble = BubbleItem(bubble_rect, radius=10.0, bg_color=cat_color, alpha=BUBBLE_BG_ALPHA)
+            col = self._color_for_event(ev)
+            bubble = BubbleItem(bubble_rect, radius=10.0, bg_color=col, alpha=BUBBLE_BG_ALPHA)
             self.scene.addItem(bubble)
 
             # Testo
@@ -468,6 +492,9 @@ class TimelineCanvas(QGraphicsView):
         self.scene.addItem(txt)
 
     def _try_draw_icon(self, x: float, top_y: float, ev: Event, icon_size: int, is_future: bool) -> bool:
+        # Per i familiari a carico usiamo sempre il cerchio colorato (no icone di categoria)
+        if (getattr(ev, 'familiare', '') or '').strip():
+            return False
         cat_key = (ev.categoria or "").strip().lower()
         path = self.icon_map.get(cat_key)
         if not path:
@@ -490,7 +517,7 @@ class TimelineCanvas(QGraphicsView):
 
     def _draw_circle(self, x: float, top_y: float, ev: Event, icon_size: int, is_future: bool) -> None:
         r = icon_size / 2
-        c = color_for(ev.categoria)
+        c = self._color_for_event(ev)
         alpha_f = self.future_opacity if is_future else 1.0
 
         border = QColor(c); border.setAlphaF(alpha_f)
@@ -595,3 +622,11 @@ class TimelineCanvas(QGraphicsView):
         f = QFont(self.font_family, size)
         f.setWeight(weight_map[chosen])
         return f
+
+    def _color_for_event(self, ev: Event) -> QColor:
+        fam = (getattr(ev, 'familiare', '') or '').strip()
+        if fam:
+            c = self.dep_color_map.get(fam)
+            if c:
+                return QColor(c)
+        return color_for(ev.categoria)

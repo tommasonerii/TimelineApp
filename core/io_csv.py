@@ -1,4 +1,4 @@
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 import pandas as pd
 from .models import Event, PersonInfo
 from .parsing import parse_eventi_field, parse_date, parse_personal_data, parse_personal_details
@@ -14,20 +14,25 @@ EXPECTED = {
 }
 
 def _map_columns(df: pd.DataFrame) -> Tuple[str, str, Optional[str], Optional[str], Optional[str]]:
-    """Ritorna le colonne (submission, eventi, nome, cognome, dati_personali)."""
-    lower = {c.lower(): c for c in df.columns}
-    subm_col = lower.get("submission date")
-    # eventi: può essere "Eventi" o "Eventi:"
-    eventi_col = lower.get("eventi:") or lower.get("eventi")
-    nome_col = lower.get("nome")
-    cognome_col = lower.get("cognome")
-    dati_pers_col = lower.get("dati personali")
+    """Ritorna le colonne (submission, eventi, nome, cognome, dati_personali). Gestisce BOM e due punti finali."""
+    def normalize(col: str) -> str:
+        x = (col or "").strip().lstrip("\ufeff").lower()
+        x = x.replace("\xa0", " ")
+        if x.endswith(":"):
+            x = x[:-1]
+        return x
+    norm_map: Dict[str, str] = {normalize(c): c for c in df.columns}
+    subm_col = norm_map.get("submission date")
+    eventi_col = norm_map.get("eventi")
+    nome_col = norm_map.get("nome")
+    cognome_col = norm_map.get("cognome")
+    dati_pers_col = norm_map.get("dati personali")
     if not (subm_col and eventi_col and (dati_pers_col or nome_col)):
         raise ValueError("Il CSV deve contenere: 'Submission Date', 'Eventi:' e 'Dati Personali' (oppure 'Nome'[/ 'Cognome']).")
     return subm_col, eventi_col, nome_col, cognome_col, dati_pers_col
 
 def load_events_csv(path: str) -> Tuple[List[Event], dict]:
-    df = pd.read_csv(path)
+    df = pd.read_csv(path, encoding="utf-8-sig", dtype=str, keep_default_na=False)
     subm_col, eventi_col, nome_col, cognome_col, dati_pers_col = _map_columns(df)
 
     events: List[Event] = []
@@ -70,7 +75,9 @@ def load_events_csv(path: str) -> Tuple[List[Event], dict]:
                 titolo=ev["Titolo"],
                 categoria=ev["Categoria"],
                 data_str=ev["DataEvento"],
-                dt=dt
+                dt=dt,
+                familiare=ev.get("Familiare", ""),
+                is_dependent=bool(ev.get("Acarico", False)),
             ))
     events_sorted = sorted(events, key=lambda e: e.dt)
     return events_sorted, people

@@ -4,11 +4,13 @@ from typing import Optional
 
 @dataclass(frozen=True)
 class Event:
-    nome: str
+    nome: str               # Capofamiglia (Nome Cognome)
     titolo: str
     categoria: str
-    data_str: str   # come nel CSV
-    dt: datetime    # parsed
+    data_str: str           # come nel CSV
+    dt: datetime            # parsed
+    familiare: str          # "" per capofamiglia, altrimenti nome familiare a carico
+    is_dependent: bool      # True se l'evento è di un familiare a carico
 
 
 @dataclass(frozen=True)
