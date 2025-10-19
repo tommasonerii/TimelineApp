@@ -4,15 +4,17 @@ from .font_utils import load_lato_family
 from typing import Dict, List, Optional, Literal
 from datetime import datetime, timedelta, date
 
-from PyQt6.QtCore import Qt, QRectF
+from PyQt6.QtCore import Qt, QRectF, QStandardPaths, QMarginsF
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPixmap, QPainterPath,
-    QTextOption, QFontDatabase
+    QTextOption, QFontDatabase, QPageLayout, QPageSize, QGuiApplication
 )
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsLineItem, QGraphicsPixmapItem,
-    QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsPathItem
+    QGraphicsEllipseItem, QGraphicsTextItem, QGraphicsPathItem,
+    QToolButton, QFileDialog
 )
+from PyQt6.QtPrintSupport import QPrinter
 
 from core.models import Event
 
@@ -134,6 +136,26 @@ class TimelineCanvas(QGraphicsView):
         self.base_font = QFont(self.font_family)
         self.setFont(self.base_font)
 
+        # Pulsante export PDF (overlay in alto a destra)
+        self._pdf_btn = QToolButton(self.viewport())
+        self._pdf_btn.setText("PDF")
+        self._pdf_btn.setToolTip("Esporta timeline in PDF")
+        self._pdf_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._pdf_btn.setAutoRaise(True)
+        self._pdf_btn.setStyleSheet(
+            """
+            QToolButton{
+                background: rgba(255,255,255,0.95);
+                border: 1px solid #e5e7eb;
+                border-radius: 6px;
+                padding: 4px 6px;
+            }
+            QToolButton:hover{ background:#f8fafc; }
+            """
+        )
+        self._pdf_btn.clicked.connect(self._on_export_pdf_clicked)
+        self._pdf_btn.hide()
+
     # ---------- API ----------
     def set_icon_map(self, icon_map: Dict[str, str]) -> None:
         self.icon_map = {(k or "").strip().lower(): v for k, v in icon_map.items()}
@@ -192,6 +214,7 @@ class TimelineCanvas(QGraphicsView):
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._redraw_and_fit()
+        self._position_print_button()
 
     # ---------- Render ----------
     def _redraw_and_fit(self) -> None:
@@ -466,6 +489,14 @@ class TimelineCanvas(QGraphicsView):
 
         # NIENTE fitInView: lasciamo la scena 1:1 con la viewport
         # self.fitInView(...)
+        # Mostra/abilita il pulsante PDF se c'è contenuto
+        if hasattr(self, "_pdf_btn"):
+            self._pdf_btn.setEnabled(bool(self.events))
+            if bool(self.events):
+                self._pdf_btn.show()
+            else:
+                self._pdf_btn.hide()
+            self._position_print_button()
 
     # ---------- Primitive ----------
     def _draw_date_opposite_clamped(
@@ -599,6 +630,83 @@ class TimelineCanvas(QGraphicsView):
 
         return result
 
+    # ---------- Stampa ----------
+    def _position_print_button(self) -> None:
+        # Ora posizioniamo solo il pulsante PDF nell'angolo in alto a destra
+        if not hasattr(self, "_pdf_btn") or self._pdf_btn is None:
+            return
+        margin = 10
+        self._pdf_btn.adjustSize()
+        x_pdf = max(0, self.viewport().width() - self._pdf_btn.width() - margin)
+        y = margin
+        self._pdf_btn.move(x_pdf, y)
+        self._pdf_btn.raise_()
+
+        # (Rimosso) azioni di stampa: usiamo solo export PDF
+
+    def _on_export_pdf_clicked(self) -> None:
+        mods = QGuiApplication.keyboardModifiers()
+        quick = bool(mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
+        if quick:
+            dl = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"timeline_{ts}.pdf"
+            path = (dl.rstrip('/\\') + '/' + filename) if dl else filename
+            self.export_pdf(path)
+        else:
+            self.export_pdf()
+
+    def export_pdf(self, path: str | None = None) -> None:
+        # Esporta direttamente a PDF (vettoriale) ad alta qualità
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+        printer.setResolution(600)
+        layout = QPageLayout(
+            QPageSize(QPageSize.PageSizeId.A4),
+            QPageLayout.Orientation.Landscape,
+            QMarginsF(10, 10, 10, 10),
+            QPageLayout.Unit.Millimeter,
+        )
+        printer.setPageLayout(layout)
+
+        if not path:
+            # Proponi cartella Download con nome file timestamp
+            dl = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"timeline_{ts}.pdf"
+            initial = filename
+            if dl:
+                initial = (dl.rstrip('/\\') + '/' + filename)
+            path, _ = QFileDialog.getSaveFileName(self, "Esporta PDF", initial, "PDF (*.pdf)")
+            if not path:
+                return
+
+        if not str(path).lower().endswith('.pdf'):
+            path = str(path) + '.pdf'
+        printer.setOutputFileName(path)
+        self._paint_to_printer(printer)
+
+    def _paint_to_printer(self, printer: QPrinter) -> None:
+        painter = QPainter(printer)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
+            # Area stampabile in pixel alla risoluzione della stampante
+            layout = printer.pageLayout()
+            pr = layout.paintRectPixels(printer.resolution())
+            target = QRectF(pr)
+            source = QRectF(self.scene.sceneRect())
+
+            # Disegna la scena adattandola all'area stampabile mantenendo le proporzioni
+            self.scene.render(
+                painter,
+                target,
+                source,
+                Qt.AspectRatioMode.KeepAspectRatio,
+            )
+        finally:
+            painter.end()
+
     # ---------- Font helpers ----------
 
     def _make_font(self, size: int, prefer: List[str]) -> QFont:
@@ -630,3 +738,9 @@ class TimelineCanvas(QGraphicsView):
             if c:
                 return QColor(c)
         return color_for(ev.categoria)
+
+
+
+
+
+
