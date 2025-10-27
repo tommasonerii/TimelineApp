@@ -6,7 +6,8 @@ from datetime import datetime, timedelta, date
 from PyQt6.QtCore import Qt, QRectF, QStandardPaths, QMarginsF
 from PyQt6.QtGui import (
     QPainter, QPen, QBrush, QColor, QFont, QPixmap, QPainterPath,
-    QTextOption, QFontDatabase, QPageLayout, QPageSize, QGuiApplication
+    QTextOption, QFontDatabase, QPageLayout, QPageSize, QGuiApplication,
+    QTextCharFormat
 )
 from PyQt6.QtWidgets import (
     QGraphicsView, QGraphicsScene, QGraphicsLineItem, QGraphicsPixmapItem,
@@ -401,23 +402,43 @@ class TimelineCanvas(QGraphicsView):
                 
                 # ------- Etichetta centrata (logica originale) -------
                 title_text = (ev.titolo or "").upper()
-                delta_text = ""
+                delta_line = ""
                 if ev.dt > now:
                     mleft = months_until(now, ev.dt)
                     if mleft >= 12:
                         years = mleft // 12
                         unit = "anno" if years == 1 else "anni"
-                        delta_text = f"\nTra: {years} {unit}"
+                        delta_line = f"Tra: {years} {unit}"
                     else:
                         mdisp = max(1, mleft)
                         unit = "mese" if mdisp == 1 else "mesi"
-                        delta_text = f"\nTra: {mdisp} {unit}"
+                        delta_line = f"Tra: {mdisp} {unit}"
 
-                label_text = f"{title_text}{delta_text}"
+                cost_line = self._format_cost_line(getattr(ev, "costo", None))
+                label_lines = [title_text]
+                if cost_line:
+                    label_lines.append(cost_line)
+                if delta_line:
+                    label_lines.append(delta_line)
+                label_text = "\n".join(label_lines)
                 label = QGraphicsTextItem()
                 label.setDefaultTextColor(self.label_color)
                 label.setFont(title_font)
                 label.setPlainText(label_text)
+                if cost_line or delta_line:
+                    doc = label.document()
+                    if cost_line:
+                        cursor_cost = doc.find(cost_line)
+                        if cursor_cost and not cursor_cost.isNull():
+                            cost_format = QTextCharFormat()
+                            cost_format.setFont(date_font)
+                            cursor_cost.mergeCharFormat(cost_format)
+                    if delta_line:
+                        cursor_delta = doc.find(delta_line)
+                        if cursor_delta and not cursor_delta.isNull():
+                            cost_format = QTextCharFormat()
+                            cost_format.setFont(date_font)
+                            cursor_delta.mergeCharFormat(cost_format)
 
                 padx = max(8, int(vw * 0.006))
                 pady = max(6, int(vh * 0.008))
@@ -438,8 +459,8 @@ class TimelineCanvas(QGraphicsView):
                 bh = br.height() + 2 * pady
                 bx = max(float(safe_pad), min(float(vw - bw - safe_pad), x - bw / 2))
 
-                gap_above = int(label_gap * (1.6 if alt_toggle["above"] else 1.0))
-                gap_below = int(label_gap * (1.6 if alt_toggle["below"] else 1.0))
+                gap_above = int(label_gap * (2.2 if alt_toggle["above"] else 1.0))
+                gap_below = int(label_gap * (2.2 if alt_toggle["below"] else 1.0))
                 above_rect = QRectF(bx, y0 - gap_above - bh, bw, bh)
                 below_rect = QRectF(bx, y0 + gap_below,   bw, bh)
 
@@ -483,7 +504,11 @@ class TimelineCanvas(QGraphicsView):
                 # Testo
                 label.setPos(bubble_rect.x() + padx, bubble_rect.y() + pady)
                 label.setZValue(1.0)
-                label.setToolTip(f"{ev.titolo}\n{ev.categoria}\n{ev.dt:%Y-%m-%d}")
+                tooltip_lines = [ev.titolo, ev.categoria]
+                if cost_line:
+                    tooltip_lines.append(cost_line)
+                tooltip_lines.append(ev.dt.strftime("%Y-%m-%d"))
+                label.setToolTip("\n".join(line for line in tooltip_lines if line))
                 self.scene.addItem(label)
 
                 # Connettore
@@ -837,6 +862,31 @@ class TimelineCanvas(QGraphicsView):
         f = QFont(self.font_family, size)
         f.setWeight(weight_map[chosen])
         return f
+
+    def _format_cost_line(self, costo: Optional[str]) -> Optional[str]:
+        """Formatta il costo per l'etichetta/tooltip, mantenendo il testo originale se non numerico."""
+        if costo is None:
+            return None
+        s = str(costo).strip()
+        if not s:
+            return None
+        allowed = set("0123456789., ")
+        if not any(ch.isdigit() for ch in s):
+            return f"Costo: {s}"
+        if any(ch not in allowed for ch in s):
+            return f"Costo: {s}"
+        cleaned = s.replace(" ", "")
+        normalized = cleaned.replace(".", "").replace(",", ".")
+        try:
+            value = float(normalized)
+        except ValueError:
+            return f"Costo: {s}"
+        if value.is_integer():
+            formatted = f"{value:,.0f}"
+        else:
+            formatted = f"{value:,.2f}"
+        formatted = formatted.replace(",", "X").replace(".", ",").replace("X", ".")
+        return f"Costo: {formatted}"
 
     def _color_for_event(self, ev: Event) -> QColor:
         fam = (getattr(ev, 'familiare', '') or '').strip()

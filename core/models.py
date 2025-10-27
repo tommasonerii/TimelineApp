@@ -11,6 +11,7 @@ class Event:
     dt: datetime            # parsed
     familiare: str          # "" per capofamiglia, altrimenti nome familiare a carico
     is_dependent: bool      # True se l'evento è di un familiare a carico
+    costo: Optional[str] = None  # Valore del campo Costo così come nel CSV
 
 
 @dataclass(frozen=True)

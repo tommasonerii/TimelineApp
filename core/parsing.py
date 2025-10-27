@@ -16,14 +16,14 @@ EVENTI_REGEX_V1 = re.compile(
 # v2 (nuovo):
 #   Titolo Evento: Matrimonio, Categoria: Progetto, Data Evento: 11-09-1999, Nome del Familiare: Carlo
 EVENTI_REGEX_V2 = re.compile(
-    r"Titolo\s*Evento:\s*([^,\n]+?),\s*Categoria:\s*([^,\n]+?),\s*Data\s*Evento:\s*([0-9]{1,4}[\/-][0-9]{1,2}[\/-][0-9]{2,4})(?:,\s*Nome\s+del\s+Familiare:\s*([^\n,]*))?",
+    r"Titolo\s*Evento:\s*([^,\n]+?),\s*Categoria:\s*([^,\n]+?),\s*Data\s*Evento:\s*([0-9]{1,4}[\/-][0-9]{1,2}[\/-][0-9]{2,4})(?:,\s*Costo:\s*([^\n,]*))?(?:,\s*Nome\s+(?:del\s+)?Familiare(?:\s+a\s+carico)?:\s*([^\n,]*))?",
     re.IGNORECASE,
 )
 
 # v3 (nuovo con campo A Carico? e Nome del Familiare A Carico):
 #   Titolo Evento: ..., Categoria: ..., Data Evento: ..., A Carico?: Si/No, Nome del Familiare A Carico: <nome|vuoto>
 EVENTI_REGEX_V3 = re.compile(
-    r"Titolo\s*Evento:\s*([^,\n]+?),\s*Categoria:\s*([^,\n]+?),\s*Data\s*Evento:\s*([0-9]{1,4}[\/-][0-9]{1,2}[\/-][0-9]{2,4}),\s*A\s*Carico\?:\s*([^,\n]+?),\s*Nome\s+del\s+Familiare\s+A\s+Carico:\s*([^\n,]*)",
+    r"Titolo\s*Evento:\s*([^,\n]+?),\s*Categoria:\s*([^,\n]+?),\s*Data\s*Evento:\s*([0-9]{1,4}[\/-][0-9]{1,2}[\/-][0-9]{2,4})(?:,\s*Costo:\s*([^\n,]*))?,\s*A\s*Carico\?:\s*([^,\n]+?),\s*Nome\s+(?:del\s+)?Familiare\s+A\s+Carico:\s*([^\n,]*)",
     re.IGNORECASE,
 )
 
@@ -52,11 +52,12 @@ def _norm_cat(cat: str) -> str:
     return mapping.get(c) or legacy.get(c) or c
 
 
-def parse_eventi_field(txt: str) -> List[Dict[str, str]]:
+def parse_eventi_field(txt: str, default_is_dependent: bool = False) -> List[Dict[str, str]]:
     """
-    Estrae una lista di dict {Titolo, Categoria, DataEvento, Familiare, Acarico} dal
+    Estrae una lista di dict {Titolo, Categoria, DataEvento, Familiare, Acarico, Costo} dal
     campo testuale 'Eventi', trattando ogni riga interna come un evento.
     Ordine e spaziatura dei campi sono tolleranti.
+    default_is_dependent forza l'evento come "a carico" se l'informazione non è presente.
     """
     out: List[Dict[str, str]] = []
     if not txt:
@@ -71,6 +72,19 @@ def parse_eventi_field(txt: str) -> List[Dict[str, str]]:
         if not parsed:
             parsed = _parse_event_line_flexible(line)
         if parsed:
+            # Normalizza costo (stringa oppure None)
+            costo_raw = parsed.get("Costo")
+            costo_str = (str(costo_raw).strip() if costo_raw is not None else "")
+            parsed["Costo"] = costo_str or None
+
+            acarico_flag = bool(parsed.get("Acarico"))
+            if default_is_dependent:
+                acarico_flag = True
+            parsed["Acarico"] = acarico_flag
+
+            if acarico_flag:
+                fam = (parsed.get("Familiare") or "").strip()
+                parsed["Familiare"] = fam
             out.append(parsed)
     return out
 
@@ -82,26 +96,50 @@ def _parse_event_line_strict(line: str) -> Optional[Dict[str, object]]:
         titolo = (m.group(1) or "").strip()
         categoria = _norm_cat(m.group(2) or "")
         data_ev = (m.group(3) or "").strip()
-        acarico_raw = (m.group(4) or "").strip().lower()
-        fam = (m.group(5) or "").strip()
+        costo = (m.group(4) or "").strip()
+        acarico_raw = (m.group(5) or "").strip().lower()
+        fam = (m.group(6) or "").strip()
         yes_vals = {"si", "sì", "yes", "y", "true", "1"}
         is_dep = acarico_raw in yes_vals
-        return {"Titolo": titolo, "Categoria": categoria, "DataEvento": data_ev, "Familiare": fam if is_dep else "", "Acarico": is_dep}
+        return {
+            "Titolo": titolo,
+            "Categoria": categoria,
+            "DataEvento": data_ev,
+            "Familiare": fam if is_dep else "",
+            "Acarico": is_dep,
+            "Costo": costo or None,
+        }
     # prova v2
     m = EVENTI_REGEX_V2.search(line)
     if m:
         titolo = (m.group(1) or "").strip()
         categoria = _norm_cat(m.group(2) or "")
         data_ev = (m.group(3) or "").strip()
-        fam = (m.group(4) or "").strip() if getattr(m.re, 'groups', 0) >= 4 else ""
-        return {"Titolo": titolo, "Categoria": categoria, "DataEvento": data_ev, "Familiare": fam, "Acarico": bool(fam)}
+        costo = (m.group(4) or "").strip() if getattr(m.re, 'groups', 0) >= 4 else ""
+        fam = (m.group(5) or "").strip() if getattr(m.re, 'groups', 0) >= 5 else ""
+        acarico = bool(fam)
+        return {
+            "Titolo": titolo,
+            "Categoria": categoria,
+            "DataEvento": data_ev,
+            "Familiare": fam if acarico else "",
+            "Acarico": acarico,
+            "Costo": costo or None,
+        }
     # prova v1
     m = EVENTI_REGEX_V1.search(line)
     if m:
         titolo = (m.group(1) or "").strip()
         categoria = _norm_cat(m.group(2) or "")
         data_ev = (m.group(3) or "").strip()
-        return {"Titolo": titolo, "Categoria": categoria, "DataEvento": data_ev, "Familiare": "", "Acarico": False}
+        return {
+            "Titolo": titolo,
+            "Categoria": categoria,
+            "DataEvento": data_ev,
+            "Familiare": "",
+            "Acarico": False,
+            "Costo": None,
+        }
     return None
 
 
@@ -122,7 +160,13 @@ def _parse_event_line_flexible(line: str) -> Optional[Dict[str, object]]:
     cat = d.get("categoria") or ""
     data_ev = d.get("data evento") or d.get("data") or ""
     acar = d.get("a carico?") or ""
-    fam = d.get("nome del familiare a carico") or d.get("nome del familiare") or ""
+    fam = (
+        d.get("nome del familiare a carico")
+        or d.get("nome familiare a carico")
+        or d.get("nome del familiare")
+        or ""
+    )
+    costo = d.get("costo") or ""
     if not (titolo and cat and data_ev):
         return None
     return {
@@ -131,6 +175,7 @@ def _parse_event_line_flexible(line: str) -> Optional[Dict[str, object]]:
         "DataEvento": data_ev.strip(),
         "Familiare": fam.strip() if (acar or '').strip().lower() in yes_vals else "",
         "Acarico": (acar or '').strip().lower() in yes_vals,
+        "Costo": costo.strip() or None,
     }
 
 
@@ -186,6 +231,7 @@ def parse_date(date_str: str) -> Optional[datetime]:
     - MM/DD/YYYY (se il primo numero <= 12)
     - DD-MM-YYYY
     - MM-DD-YYYY
+    - fallback smart swap per formati con anno finale (es. 06-20-2028)
     """
     if not date_str:
         return None
@@ -194,18 +240,31 @@ def parse_date(date_str: str) -> Optional[datetime]:
     if len(parts) != 3 or any(not p.isdigit() for p in parts):
         return None
     a, b, c = map(int, parts)
-    try:
-        # Preferisci D-M-Y quando l'ultimo è l'anno
-        if c > 999:
-            d, m, y = a, b, c
-        elif a > 999:  # YYYY-M-D
-            y, m, d = a, b, c
-        else:
-            # fallback euristico: se b è un mese valido → D/M/Y
-            if 1 <= b <= 12:
-                d, m, y = a, b, c
-            else:
-                return None
-        return datetime(y, m, d)
-    except Exception:
+
+    def try_build(day: int, month: int, year: int) -> Optional[datetime]:
+        try:
+            return datetime(year, month, day)
+        except ValueError:
+            return None
+
+    # Caso YYYY-M-D
+    if a > 999:
+        return try_build(c, b, a)
+
+    # Caso anno alla fine (piu comune nei nostri CSV)
+    if c > 999:
+        # Prima prova interpretazione D-M-Y
+        dt = try_build(a, b, c)
+        if dt is not None:
+            return dt
+        # Se il mese risulta invalido, prova interpretazione M-D-Y
+        dt = try_build(b, a, c)
+        if dt is not None:
+            return dt
         return None
+
+    # Fallback: data con anno corto al termine, tenta D-M-Y
+    if 1 <= b <= 12:
+        return try_build(a, b, c)
+
+    return None
