@@ -13,6 +13,7 @@ from PyQt6.QtGui import QFont, QColor, QPalette
 
 from core.io_csv import load_events_csv
 from .styles import STYLE_LIGHT
+from core.mortality_tables import MortalityTableLoader
 from .timeline_canvas import TimelineCanvas
 from .finance_chart import FinanceChart
 from .compound_interest import CompoundInterestWidget
@@ -312,6 +313,19 @@ class MainWindow(QMainWindow):
             "studio":    os.path.join(icon_base, "studio.png"),
             "salute":    os.path.join(icon_base, "salute.png"),
         })
+
+        # Carica tabelle di mortalità (CSV separati da ';') e inietta nel canvas
+        try:
+            tables_dir = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "assets", "tables"))
+            loader = MortalityTableLoader(sep=';')
+            male_path = os.path.join(tables_dir, "mortalità maschi.CSV")
+            female_path = os.path.join(tables_dir, "mortalità femmine.CSV")
+            m_male = loader.load_table(male_path)
+            m_female = loader.load_table(female_path)
+            self.canvas.set_expectancy_tables(m_male, m_female)
+        except Exception:
+            # In caso di errore di lettura, il canvas userà il fallback interno
+            pass
 
         # ---------- Contenuto scrollabile ----------
         content = QWidget()

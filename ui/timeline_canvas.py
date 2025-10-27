@@ -127,6 +127,9 @@ class TimelineCanvas(QGraphicsView):
         self.birth_dt: Optional[datetime] = None
         self.dep_color_map: Dict[str, QColor] = {}
         self.current_person: Optional[str] = None
+        # Tabelle di aspettativa di vita (iniettate dall'esterno)
+        self.mappa_maschi: Dict[int, int] = {}
+        self.mappa_femmine: Dict[int, int] = {}
 
         # Stile
         self.axis_color = QColor("#5b6570")
@@ -186,21 +189,43 @@ class TimelineCanvas(QGraphicsView):
                 idx += 1
         self._redraw_and_fit()
 
+    def set_expectancy_tables(self, mappa_maschi: Dict[int, int], mappa_femmine: Dict[int, int]) -> None:
+        """Inietta le tabelle di aspettativa di vita (anni rimanenti per età)."""
+        self.mappa_maschi = dict(mappa_maschi or {})
+        self.mappa_femmine = dict(mappa_femmine or {})
+
     def set_expectancy(self, birth_dt: Optional[datetime], sex: Optional[str]) -> None:
-        """Imposta la data dell'aspettativa di vita dato sesso e data di nascita."""
+        """Imposta la data dell'aspettativa di vita usando le tabelle iniettate.
+        Fallback: 82 anni fissi se sesso non in tabella o età assente.
+        """
         self.expectancy_dt = None
         self.birth_dt = birth_dt
-        if not birth_dt or not sex:
+        if not birth_dt:
             self._redraw_and_fit()
             return
 
+        # Età attuale in anni compiuti
+        today = date.today()
+        bdate = birth_dt.date()
+        age = today.year - bdate.year - ((today.month, today.day) < (bdate.month, bdate.day))
+        if age < 0:
+            age = 0
+
+        # Seleziona tabella in base al sesso
         s = (sex or "").strip().lower()
+        years_left: Optional[int] = None
         if s.startswith("m") or s.startswith("uomo") or s.startswith("masc"):
-            years = LIFE_EXPECTANCY_YEARS_MALE
+            years_left = self.mappa_maschi.get(age)
         elif s.startswith("f") or s.startswith("donna") or s.startswith("femm"):
-            years = LIFE_EXPECTANCY_YEARS_FEMALE
+            years_left = self.mappa_femmine.get(age)
         else:
-            years = LIFE_EXPECTANCY_YEARS_OTHER
+            years_left = None
+
+        # Calcola gli anni totali da nascita → fine vita
+        if years_left is None:
+            total_years = 82  # fallback fisso
+        else:
+            total_years = age + max(0, int(years_left))
 
         def _add_years(d: datetime, n: int) -> datetime:
             try:
@@ -212,7 +237,7 @@ class TimelineCanvas(QGraphicsView):
                 # fallback: aggiungi giorni approssimati
                 return d + timedelta(days=int(n * 365.25))
 
-        self.expectancy_dt = _add_years(birth_dt, years)
+        self.expectancy_dt = _add_years(birth_dt, total_years)
         self._redraw_and_fit()
 
     # ---------- Eventi Qt ----------
@@ -511,7 +536,7 @@ class TimelineCanvas(QGraphicsView):
                 dot_b.setToolTip(f"Nascita: {dt:%Y-%m-%d}")
                 self.scene.addItem(dot_b)
                 
-                txt_b = QGraphicsTextItem("NASCITA")
+                txt_b = QGraphicsTextItem("NASCITA" + "\n" + dt.strftime("%Y"))
                 txt_b.setDefaultTextColor(QColor("#6b7280"))
                 txt_b.setFont(oggi_font)
                 rct_b = txt_b.boundingRect()
