@@ -125,6 +125,7 @@ class TimelineCanvas(QGraphicsView):
         self.icon_map: Dict[str, str] = {}
         self.expectancy_dt: Optional[datetime] = None
         self.dep_color_map: Dict[str, QColor] = {}
+        self.current_person: Optional[str] = None
 
         # Stile
         self.axis_color = QColor("#5b6570")
@@ -162,6 +163,8 @@ class TimelineCanvas(QGraphicsView):
 
     def set_events(self, events: List[Event]) -> None:
         self.events = sorted(events, key=lambda e: e.dt)
+        # Ricava il nome persona dagli eventi (tutti della stessa persona)
+        self.current_person = (self.events[0].nome if self.events else None)
         # Costruisci la mappa colori per i familiari a carico
         self.dep_color_map.clear()
         palette = [
@@ -723,8 +726,8 @@ class TimelineCanvas(QGraphicsView):
         quick = bool(mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier))
         if quick:
             dl = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"timeline_{ts}.pdf"
+            # Preferisci nome persona nel filename
+            filename = self._default_pdf_filename()
             path = (dl.rstrip('/\\') + '/' + filename) if dl else filename
             self.export_pdf(path)
         else:
@@ -744,10 +747,9 @@ class TimelineCanvas(QGraphicsView):
         printer.setPageLayout(layout)
 
         if not path:
-            # Proponi cartella Download con nome file timestamp
+            # Proponi cartella Download con nome file basato sulla persona
             dl = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"timeline_{ts}.pdf"
+            filename = self._default_pdf_filename()
             initial = filename
             if dl:
                 initial = (dl.rstrip('/\\') + '/' + filename)
@@ -759,6 +761,27 @@ class TimelineCanvas(QGraphicsView):
             path = str(path) + '.pdf'
         printer.setOutputFileName(path)
         self._paint_to_printer(printer)
+
+    def _default_pdf_filename(self) -> str:
+        """Costruisce il nome file predefinito per l'export PDF.
+        Formato richiesto: timeline_nome_cognome.pdf (senza timestamp).
+        In assenza del nome persona, ricade su timeline.pdf.
+        """
+        person = (self.current_person or "").strip()
+        if not person:
+            base = "timeline"
+        else:
+            try:
+                import unicodedata
+                norm = unicodedata.normalize('NFKD', person)
+                ascii_only = ''.join(ch for ch in norm if not unicodedata.combining(ch))
+            except Exception:
+                ascii_only = person
+            slug = ''.join(ch if ch.isalnum() or ch in (' ', '-', '_') else ' ' for ch in ascii_only)
+            slug = '_'.join(part for part in slug.strip().split())
+            slug = slug.lower()
+            base = f"timeline_{slug}" if slug else "timeline"
+        return f"{base}.pdf"
 
     def _paint_to_printer(self, printer: QPrinter) -> None:
         painter = QPainter(printer)
