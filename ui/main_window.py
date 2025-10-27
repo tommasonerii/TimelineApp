@@ -5,9 +5,10 @@ import os
 from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFileDialog, QComboBox, QMessageBox, QSizePolicy,
-    QFrame, QScrollArea, QListView, QCompleter
+    QFrame, QScrollArea, QListView, QCompleter, QCheckBox
 )
 from PyQt6.QtCore import Qt
+from datetime import datetime
 from PyQt6.QtGui import QFont, QColor, QPalette
 
 from core.io_csv import load_events_csv
@@ -251,6 +252,27 @@ class MainWindow(QMainWindow):
         pw.addWidget(self.person_combo, 0, Qt.AlignmentFlag.AlignVCenter)
         chip_person = make_chip(person_wrap)
 
+        # ---------- Filtro temporale (Passato / Futuro) ----------
+        filt_wrap = QWidget()
+        fl = QHBoxLayout(filt_wrap)
+        fl.setContentsMargins(0, 0, 0, 0)
+        fl.setSpacing(10)
+        lbl_filt = QLabel("Mostra:")
+        lbl_filt.setStyleSheet("color:#374151; font-weight: 600;")
+        lbl_filt.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        self.chk_past = QCheckBox("Passato")
+        self.chk_future = QCheckBox("Futuro")
+        self.chk_past.setChecked(True)
+        self.chk_future.setChecked(True)
+        # rendi i checkbox leggibili
+        self.chk_past.setStyleSheet("color:#111;")
+        self.chk_future.setStyleSheet("color:#111;")
+        fl.addWidget(lbl_filt, 0, Qt.AlignmentFlag.AlignVCenter)
+        fl.addWidget(self.chk_past, 0, Qt.AlignmentFlag.AlignVCenter)
+        fl.addWidget(self.chk_future, 0, Qt.AlignmentFlag.AlignVCenter)
+        fl.addStretch(1)
+        chip_filter = make_chip(filt_wrap)
+
         # ---------- Top row ----------
         top_row = QWidget()
         row = QHBoxLayout(top_row)
@@ -259,6 +281,7 @@ class MainWindow(QMainWindow):
         row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         row.addWidget(chip_load)
         row.addWidget(chip_status, 1)
+        row.addWidget(chip_filter)
         row.addWidget(chip_person)
 
         # ---------- Timeline ----------
@@ -316,6 +339,8 @@ class MainWindow(QMainWindow):
         # Signals
         self.btn_load.clicked.connect(self.on_load_csv)
         self.person_combo.currentTextChanged.connect(self.on_person_changed)
+        self.chk_past.stateChanged.connect(self.on_time_filter_changed)
+        self.chk_future.stateChanged.connect(self.on_time_filter_changed)
 
     # ===== Actions =====
     def on_load_csv(self):
@@ -384,8 +409,21 @@ class MainWindow(QMainWindow):
             self.compound.set_start_date(None)
             return
 
+        # Applica filtro temporale (Passato/Futuro)
+        show_past = self.chk_past.isChecked()
+        show_future = self.chk_future.isChecked()
+        now = datetime.now()
+        if show_past and show_future:
+            filtered = sub
+        elif show_past:
+            filtered = [e for e in sub if e.dt <= now]
+        elif show_future:
+            filtered = [e for e in sub if e.dt > now]
+        else:
+            filtered = []
+
         # Timeline
-        self.canvas.set_events(sub)
+        self.canvas.set_events(filtered)
         # Imposta marker aspettativa di vita se disponibile per la persona
         birth_dt = None
         sex = ""
@@ -396,7 +434,10 @@ class MainWindow(QMainWindow):
                 sex = getattr(info, 'sesso', '')
         self.canvas.set_expectancy(birth_dt, sex)
         # Finance chart
-        self.finance_chart.set_event_dates([e.dt for e in sub])
+        self.finance_chart.set_event_dates([e.dt for e in filtered])
         # Compound interest: (data, titolo) per marker/etichette + data di partenza
-        self.compound.set_event_points([(e.dt, e.titolo or "") for e in sub])
-        self.compound.set_start_date(sub[0].dt)
+        self.compound.set_event_points([(e.dt, e.titolo or "") for e in filtered])
+        self.compound.set_start_date(filtered[0].dt if filtered else None)
+
+    def on_time_filter_changed(self, _state):
+        self.render_timeline()
