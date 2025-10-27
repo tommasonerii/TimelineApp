@@ -345,7 +345,7 @@ class TimelineCanvas(QGraphicsView):
             self.scene.addItem(dot)
             exp_dot_item = dot
 
-            txt = QGraphicsTextItem("ASPETTATIVA")
+            txt = QGraphicsTextItem("ASPETTATIVA:\n" + self.expectancy_dt.strftime("%Y"))
             txt.setDefaultTextColor(QColor("#6b7280"))
             txt.setFont(oggi_font)
             rct = txt.boundingRect()
