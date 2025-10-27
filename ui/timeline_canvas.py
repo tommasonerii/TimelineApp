@@ -537,10 +537,44 @@ class TimelineCanvas(QGraphicsView):
                 vw=vw, vh=vh, safe_pad=safe_pad
             )
 
-        # OGGI è già stato allineato prima del primo evento futuro
+        # Riposiziona il marker "OGGI" per rispettare distanza minima SU ENTRAMBI I LATI
+        # Usa le posizioni finali dei pallini (prev_ev_x/next_ev_x) così funziona
+        # anche quando si filtra solo passato o solo futuro.
+        if today_dot_item is not None and today_x is not None and today_r is not None:
+            dot_spacing = max(float(MIN_DOT_SPACING_PX), float(int(max_label_w * 0.55)))
+            left_bound = float(safe_pad) + today_r
+            if prev_ev_x is not None:
+                left_bound = max(left_bound, prev_ev_x + dot_spacing)
+            right_bound = float(vw - safe_pad) - today_r
+            if next_ev_x is not None:
+                right_bound = min(right_bound, next_ev_x - dot_spacing)
+            new_x = today_x
+            if left_bound > right_bound:
+                # spazio insufficiente: scegli il più vicino al valore originale
+                if abs(new_x - left_bound) <= abs(new_x - right_bound):
+                    new_x = left_bound
+                else:
+                    new_x = right_bound
+            else:
+                if new_x < left_bound:
+                    new_x = left_bound
+                elif new_x > right_bound:
+                    new_x = right_bound
+            if abs(new_x - today_x) > 0.1:
+                rect = today_dot_item.rect()
+                rect.moveLeft(new_x - today_r)
+                today_dot_item.setRect(rect)
+                if today_txt_item is not None:
+                    rct = today_txt_item.boundingRect()
+                    txt_x = max(float(safe_pad), min(float(vw - rct.width() - safe_pad), new_x - rct.width() / 2))
+                    txt_y = y0 + date_gap + 18
+                    txt_y = max(float(safe_pad), min(float(vh - rct.height() - safe_pad), txt_y))
+                    today_txt_item.setPos(txt_x, txt_y)
+                today_x = new_x
+
         # Riposiziona il marker "ASPETTATIVA" per rispettare la distanza minima
         if exp_dot_item is not None and exp_x is not None and exp_r is not None:
-            dot_spacing = float(int(max_label_w * 0.55))
+            dot_spacing = max(float(MIN_DOT_SPACING_PX), float(int(max_label_w * 0.55)))
             left_bound = float(safe_pad) + exp_r
             if last_dot_x is not None:
                 left_bound = max(left_bound, last_dot_x + dot_spacing)
