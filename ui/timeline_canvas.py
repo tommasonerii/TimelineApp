@@ -261,7 +261,10 @@ class TimelineCanvas(QGraphicsView):
         self.scene.addItem(axis)
 
         # Range temporale con padding simmetrico (considera anche aspettativa se presente)
+        # Include sempre "oggi" per garantire che il marker sia visibile.
         dates_for_range = [e.dt for e in self.events]
+        now_range = datetime.now()
+        dates_for_range.append(now_range)
         if self.expectancy_dt is not None:
             dates_for_range.append(self.expectancy_dt)
         dt_min = min(dates_for_range)
@@ -278,6 +281,17 @@ class TimelineCanvas(QGraphicsView):
             rel = (d - dt_min_pad).total_seconds() / total_sec if total_sec > 0 else 0.0
             rel = max(0.0, min(1.0, rel))
             return axis_x1 + (axis_x2 - axis_x1) * rel
+        today_x: Optional[float] = None
+        today_r: Optional[float] = None
+        today_dot_item = None
+        today_txt_item = None
+        prev_ev_x: Optional[float] = None
+        next_ev_x: Optional[float] = None
+        # Riferimenti per marker Aspettativa
+        exp_x: Optional[float] = None
+        exp_r: Optional[float] = None
+        exp_dot_item = None
+        exp_txt_item = None
 
         # "OGGI"
         now = datetime.now()
@@ -286,14 +300,18 @@ class TimelineCanvas(QGraphicsView):
             r = today_size / 2
             # Clamp X del marker oggi
             x_now = max(safe_pad + r, min(vw - safe_pad - r, x_now))
+            today_x = x_now
+            today_r = r
 
             dot = QGraphicsEllipseItem(x_now - r, y0 - r, 2 * r, 2 * r)
             pen = QPen(TODAY_COLOR, max(2, int(vh * 0.005)))
             dot.setPen(pen)
             dot.setBrush(QBrush(TODAY_COLOR))
-            dot.setZValue(2.0)
+            # Metti OGGI sopra ai pallini evento per evitare che venga coperto
+            dot.setZValue(2.2)
             dot.setToolTip(f"Oggi: {now:%Y-%m-%d}")
             self.scene.addItem(dot)
+            today_dot_item = dot
 
             oggi_txt = QGraphicsTextItem("OGGI")
             oggi_txt.setDefaultTextColor(QColor("#6b7280"))
@@ -307,6 +325,7 @@ class TimelineCanvas(QGraphicsView):
             oggi_txt.setPos(txt_x, txt_y)
             oggi_txt.setZValue(0.3)
             self.scene.addItem(oggi_txt)
+            today_txt_item = oggi_txt
 
         # "ASPETTATIVA"
         if self.expectancy_dt is not None and dt_min_pad <= self.expectancy_dt <= dt_max_pad:
@@ -321,6 +340,7 @@ class TimelineCanvas(QGraphicsView):
             dot.setZValue(2.0)
             dot.setToolTip(f"Aspettativa: {self.expectancy_dt:%Y-%m-%d}")
             self.scene.addItem(dot)
+            exp_dot_item = dot
 
             txt = QGraphicsTextItem("ASPETTATIVA")
             txt.setDefaultTextColor(QColor("#6b7280"))
@@ -332,6 +352,9 @@ class TimelineCanvas(QGraphicsView):
             txt.setPos(txt_x, txt_y)
             txt.setZValue(0.3)
             self.scene.addItem(txt)
+            exp_txt_item = txt
+            exp_x = x_exp
+            exp_r = r
 
         last_label_rects: Dict[Literal["above", "below"], List[QRectF]] = {
             "above": [],
@@ -362,9 +385,29 @@ class TimelineCanvas(QGraphicsView):
             min_x = float(safe_pad) + icon_size / 2
             max_x = float(vw - safe_pad) - icon_size / 2
             x = max(min_x, min(max_x, x_nom))
+            # Spaziatura OGGI rispetto all'ultimo passato prima del primo futuro
+            dot_spacing_pre = max(float(MIN_DOT_SPACING_PX), float(int(max_label_w * 0.55)))
+            if today_x is not None and ev.dt >= now and (last_dot_x is None or last_dot_x < today_x):
+                if prev_ev_x is not None and today_r is not None:
+                    left_bound = prev_ev_x + dot_spacing_pre
+                    left_bound = max(float(safe_pad) + today_r, min(float(vw - safe_pad) - today_r, left_bound))
+                    if today_x < left_bound:
+                        if today_dot_item is not None:
+                            rect = today_dot_item.rect()
+                            rect.moveLeft(left_bound - today_r)
+                            today_dot_item.setRect(rect)
+                        if today_txt_item is not None:
+                            rct = today_txt_item.boundingRect()
+                            txt_x = max(float(safe_pad), min(float(vw - rct.width() - safe_pad), left_bound - rct.width() / 2))
+                            txt_y = y0 + date_gap + 18
+                            txt_y = max(float(safe_pad), min(float(vh - rct.height() - safe_pad), txt_y))
+                            today_txt_item.setPos(txt_x, txt_y)
+                        today_x = left_bound
+                last_dot_x = today_x
+            
 
-            # Enforce distanza minima tra i pallini: metà larghezza max etichetta +10%
-            dot_spacing = float(int(max_label_w * 0.55))
+            # Enforce distanza minima tra i pallini: usa la soglia più grande
+            dot_spacing = max(float(MIN_DOT_SPACING_PX), float(int(max_label_w * 0.55)))
             if last_dot_x is not None and x < last_dot_x + dot_spacing:
                 x = min(max_x, last_dot_x + dot_spacing)
 
@@ -446,6 +489,10 @@ class TimelineCanvas(QGraphicsView):
 
             # X finale deciso: aggiorna il riferimento e disegna il marker
             last_dot_x = x
+            if ev.dt <= now:
+                prev_ev_x = x
+            elif next_ev_x is None:
+                next_ev_x = x
 
             # Toggle alternanza per il lato usato
             alt_toggle[side] = not alt_toggle[side]
@@ -487,6 +534,33 @@ class TimelineCanvas(QGraphicsView):
                 vw=vw, vh=vh, safe_pad=safe_pad
             )
 
+        # OGGI è già stato allineato prima del primo evento futuro
+        # Riposiziona il marker "ASPETTATIVA" per rispettare la distanza minima
+        if exp_dot_item is not None and exp_x is not None and exp_r is not None:
+            dot_spacing = float(int(max_label_w * 0.55))
+            left_bound = float(safe_pad) + exp_r
+            if last_dot_x is not None:
+                left_bound = max(left_bound, last_dot_x + dot_spacing)
+            if today_x is not None and today_x <= exp_x:
+                left_bound = max(left_bound, today_x + dot_spacing)
+            right_bound = float(vw - safe_pad) - exp_r
+            new_x = exp_x
+            if left_bound > right_bound:
+                new_x = right_bound
+            else:
+                if new_x < left_bound:
+                    new_x = left_bound
+            if abs(new_x - exp_x) > 0.1:
+                rect = exp_dot_item.rect()
+                rect.moveLeft(new_x - exp_r)
+                exp_dot_item.setRect(rect)
+                if exp_txt_item is not None:
+                    rct = exp_txt_item.boundingRect()
+                    txt_x = max(float(safe_pad), min(float(vw - rct.width() - safe_pad), new_x - rct.width() / 2))
+                    txt_y = y0 + date_gap + 18
+                    txt_y = max(float(safe_pad), min(float(vh - rct.height() - safe_pad), txt_y))
+                    exp_txt_item.setPos(txt_x, txt_y)
+                exp_x = new_x
         # NIENTE fitInView: lasciamo la scena 1:1 con la viewport
         # self.fitInView(...)
         # Mostra/abilita il pulsante PDF se c'è contenuto
