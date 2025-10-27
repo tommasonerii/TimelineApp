@@ -1,4 +1,3 @@
-# ui/timeline_canvas.py
 from __future__ import annotations
 from .font_utils import load_lato_family
 from typing import Dict, List, Optional, Literal
@@ -23,20 +22,21 @@ from core.models import Event
 # ===========================
 CATEGORY_COLORS: Dict[str, str] = {
     # Nuove categorie principali
-    "bisogno":   "#ef4444",  # red-500
+    "bisogno":  "#ef4444",  # red-500
     "progetto":  "#3b82f6",  # blue-500
     "desiderio": "#10b981",  # emerald-500
     # Retrocompatibilità (se arrivano ancora eventi legacy)
-    "famiglia":   "#fa9f42",
-    "finanze":    "#2b4162",
-    "sogni":      "#0b6e4f",
-    "carriera":   "#814342",
+    "famiglia":  "#fa9f42",
+    "finanze":   "#2b4162",
+    "sogni":   "#0b6e4f",
+    "carriera":  "#814342",
     "istruzione": "#e0e0e2",
-    "salute":     "#f71735",
+    "salute":   "#f71735",
 }
 DEFAULT_COLOR = "#C7884A"
-TODAY_COLOR   = QColor("#0f172a")
+TODAY_COLOR  = QColor("#0f172a")
 EXPECTANCY_COLOR = QColor("#6366f1")  # viola
+BIRTH_COLOR = QColor("#0891b2")      # cyan-600
 
 # Aspettativa di vita (anni) modificabili
 LIFE_EXPECTANCY_YEARS_MALE   = 82
@@ -124,6 +124,7 @@ class TimelineCanvas(QGraphicsView):
         self.events: List[Event] = []
         self.icon_map: Dict[str, str] = {}
         self.expectancy_dt: Optional[datetime] = None
+        self.birth_dt: Optional[datetime] = None
         self.dep_color_map: Dict[str, QColor] = {}
         self.current_person: Optional[str] = None
 
@@ -188,6 +189,7 @@ class TimelineCanvas(QGraphicsView):
     def set_expectancy(self, birth_dt: Optional[datetime], sex: Optional[str]) -> None:
         """Imposta la data dell'aspettativa di vita dato sesso e data di nascita."""
         self.expectancy_dt = None
+        self.birth_dt = birth_dt
         if not birth_dt or not sex:
             self._redraw_and_fit()
             return
@@ -224,6 +226,11 @@ class TimelineCanvas(QGraphicsView):
         self.scene.clear()
         self.resetTransform()
         if not self.events:
+            # Assicurati che il pulsante PDF sia nascosto
+            # se non ci sono eventi, anche se la funzione esce qui.
+            if hasattr(self, "_pdf_btn"):
+                self._pdf_btn.setEnabled(False)
+                self._pdf_btn.hide()
             return
 
         # Dimensioni viewport e scena 1:1
@@ -235,7 +242,7 @@ class TimelineCanvas(QGraphicsView):
         safe_pad = max(12, int(min(vw, vh) * 0.022))
 
         # Metriche
-        pad_x      = int(vw * SIDE_PAD_RATIO)
+        pad_x  = int(vw * SIDE_PAD_RATIO)
         axis_thick = max(2, int(vh * 0.008))
         icon_size  = max(12, int(vh * 0.055))
         today_size = max(8,  int(vh * 0.030))
@@ -266,10 +273,12 @@ class TimelineCanvas(QGraphicsView):
         # Range temporale con padding simmetrico (considera anche aspettativa se presente)
         # Include sempre "oggi" per garantire che il marker sia visibile.
         dates_for_range = [e.dt for e in self.events]
-        now_range = datetime.now()
-        dates_for_range.append(now_range)
+        now = datetime.now() # 'now' definito qui
+        dates_for_range.append(now)
         if self.expectancy_dt is not None:
             dates_for_range.append(self.expectancy_dt)
+        if self.birth_dt is not None:
+            dates_for_range.append(self.birth_dt)
         dt_min = min(dates_for_range)
         dt_max = max(dates_for_range)
         if dt_min == dt_max:
@@ -284,87 +293,12 @@ class TimelineCanvas(QGraphicsView):
             rel = (d - dt_min_pad).total_seconds() / total_sec if total_sec > 0 else 0.0
             rel = max(0.0, min(1.0, rel))
             return axis_x1 + (axis_x2 - axis_x1) * rel
-        today_x: Optional[float] = None
-        today_r: Optional[float] = None
-        today_dot_item = None
-        today_txt_item = None
-        prev_ev_x: Optional[float] = None
-        next_ev_x: Optional[float] = None
-        # Riferimenti per marker Aspettativa
-        exp_x: Optional[float] = None
-        exp_r: Optional[float] = None
-        exp_dot_item = None
-        exp_txt_item = None
-
-        # "OGGI"
-        now = datetime.now()
-        if dt_min_pad <= now <= dt_max_pad:
-            x_now = x_from_dt(now)
-            r = today_size / 2
-            # Clamp X del marker oggi
-            x_now = max(safe_pad + r, min(vw - safe_pad - r, x_now))
-            today_x = x_now
-            today_r = r
-
-            dot = QGraphicsEllipseItem(x_now - r, y0 - r, 2 * r, 2 * r)
-            pen = QPen(TODAY_COLOR, max(2, int(vh * 0.005)))
-            dot.setPen(pen)
-            dot.setBrush(QBrush(TODAY_COLOR))
-            # Metti OGGI sopra ai pallini evento per evitare che venga coperto
-            dot.setZValue(2.2)
-            dot.setToolTip(f"Oggi: {now:%Y-%m-%d}")
-            self.scene.addItem(dot)
-            today_dot_item = dot
-
-            oggi_txt = QGraphicsTextItem("OGGI")
-            oggi_txt.setDefaultTextColor(QColor("#6b7280"))
-            oggi_txt.setFont(oggi_font)
-            rct = oggi_txt.boundingRect()
-            # Clamp orizzontale del testo
-            txt_x = max(safe_pad, min(vw - rct.width() - safe_pad, x_now - rct.width() / 2))
-            txt_y = y0 + date_gap + 18
-            # Clamp verticale
-            txt_y = max(safe_pad, min(vh - rct.height() - safe_pad, txt_y))
-            oggi_txt.setPos(txt_x, txt_y)
-            oggi_txt.setZValue(0.3)
-            self.scene.addItem(oggi_txt)
-            today_txt_item = oggi_txt
-
-        # "ASPETTATIVA"
-        if self.expectancy_dt is not None and dt_min_pad <= self.expectancy_dt <= dt_max_pad:
-            x_exp = x_from_dt(self.expectancy_dt)
-            r = today_size / 2
-            x_exp = max(safe_pad + r, min(vw - safe_pad - r, x_exp))
-
-            dot = QGraphicsEllipseItem(x_exp - r, y0 - r, 2 * r, 2 * r)
-            pen = QPen(EXPECTANCY_COLOR, max(2, int(vh * 0.005)))
-            dot.setPen(pen)
-            dot.setBrush(QBrush(EXPECTANCY_COLOR))
-            dot.setZValue(2.0)
-            dot.setToolTip(f"Aspettativa: {self.expectancy_dt:%Y-%m-%d}")
-            self.scene.addItem(dot)
-            exp_dot_item = dot
-
-            txt = QGraphicsTextItem("ASPETTATIVA:\n" + self.expectancy_dt.strftime("%Y"))
-            txt.setDefaultTextColor(QColor("#6b7280"))
-            txt.setFont(oggi_font)
-            rct = txt.boundingRect()
-            txt_x = max(safe_pad, min(vw - rct.width() - safe_pad, x_exp - rct.width() / 2))
-            txt_y = y0 + date_gap + 18
-            txt_y = max(safe_pad, min(vh - rct.height() - safe_pad, txt_y))
-            txt.setPos(txt_x, txt_y)
-            txt.setZValue(0.3)
-            self.scene.addItem(txt)
-            exp_txt_item = txt
-            exp_x = x_exp
-            exp_r = r
 
         last_label_rects: Dict[Literal["above", "below"], List[QRectF]] = {
             "above": [],
             "below": [],
         }
-        next_side: Literal["above", "below"] = "above"
-
+        
         # Per garantire una distanza minima orizzontale tra i pallini
         last_dot_x: Optional[float] = None
         # Alternanza distanza verticale etichette per lato
@@ -382,228 +316,245 @@ class TimelineCanvas(QGraphicsView):
             if end.day > start.day:
                 months += 1  # conta il mese parziale come pieno
             return max(0, months)
+        
+        # =====================================================================
+        # Inizio della logica di spaziatura unificata
+        # =====================================================================
 
+        # --- 1. RACCOGLI TUTTI I MARKER ---
+        all_markers = []
+        
+        # Aggiungi eventi
         for ev in self.events:
-            x_nom = x_from_dt(ev.dt)
-            min_x = float(safe_pad) + icon_size / 2
-            max_x = float(vw - safe_pad) - icon_size / 2
-            x = max(min_x, min(max_x, x_nom))
-            # Spaziatura OGGI rispetto all'ultimo passato prima del primo futuro
-            dot_spacing_pre = max(float(MIN_DOT_SPACING_PX), float(int(max_label_w * 0.55)))
-            if today_x is not None and ev.dt >= now and (last_dot_x is None or last_dot_x < today_x):
-                if prev_ev_x is not None and today_r is not None:
-                    left_bound = prev_ev_x + dot_spacing_pre
-                    left_bound = max(float(safe_pad) + today_r, min(float(vw - safe_pad) - today_r, left_bound))
-                    if today_x < left_bound:
-                        if today_dot_item is not None:
-                            rect = today_dot_item.rect()
-                            rect.moveLeft(left_bound - today_r)
-                            today_dot_item.setRect(rect)
-                        if today_txt_item is not None:
-                            rct = today_txt_item.boundingRect()
-                            txt_x = max(float(safe_pad), min(float(vw - rct.width() - safe_pad), left_bound - rct.width() / 2))
-                            txt_y = y0 + date_gap + 18
-                            txt_y = max(float(safe_pad), min(float(vh - rct.height() - safe_pad), txt_y))
-                            today_txt_item.setPos(txt_x, txt_y)
-                        today_x = left_bound
-                last_dot_x = today_x
-            
+            all_markers.append({"dt": ev.dt, "type": "event", "data": ev})
 
-            # Enforce distanza minima tra i pallini: usa la soglia più grande
-            dot_spacing = max(float(MIN_DOT_SPACING_PX), float(int(max_label_w * 0.55)))
+        # Aggiungi "OGGI"
+        if dt_min_pad <= now <= dt_max_pad:
+            all_markers.append({"dt": now, "type": "today", "data": None})
+
+        # Aggiungi "NASCITA"
+        if self.birth_dt is not None and dt_min_pad <= self.birth_dt <= dt_max_pad:
+            all_markers.append({"dt": self.birth_dt, "type": "birth", "data": None})
+
+        # Aggiungi "ASPETTATIVA"
+        if self.expectancy_dt is not None and dt_min_pad <= self.expectancy_dt <= dt_max_pad:
+            all_markers.append({"dt": self.expectancy_dt, "type": "expectancy", "data": None})
+        
+        # --- 2. ORDINA I MARKER PER DATA ---
+        all_markers.sort(key=lambda m: m["dt"])
+
+        # --- 3. LOOP UNICO: SPAZIATURA E DISEGNO ---
+        dot_spacing = max(float(MIN_DOT_SPACING_PX), float(int(max_label_w * 0.55)))
+
+        for marker in all_markers:
+            dt = marker["dt"]
+            m_type = marker["type"]
+            
+            # --- 3a. LOGICA DI SPAZIATURA UNIFICATA ---
+            x_nom = x_from_dt(dt)
+            
+            # Determina il raggio del pallino per il clamping
+            if m_type == "event":
+                r = icon_size / 2
+            else:
+                r = today_size / 2  # Nascita, Oggi, Aspettativa
+            
+            min_x = float(safe_pad) + r
+            max_x = float(vw - safe_pad) - r
+            x = max(min_x, min(max_x, x_nom))
+
+            # Applica la spaziatura minima rispetto all'ultimo pallino posizionato
             if last_dot_x is not None and x < last_dot_x + dot_spacing:
                 x = min(max_x, last_dot_x + dot_spacing)
+            
+            last_dot_x = x  # Aggiorna la posizione dell'ultimo pallino
 
-            # ------- Etichetta centrata -------
-            title_text = (ev.titolo or "").upper()
-            # Delta temporale solo per eventi futuri
-            delta_text = ""
-            if ev.dt > now:
-                mleft = months_until(now, ev.dt)
-                if mleft >= 12:
-                    years = mleft // 12
-                    unit = "anno" if years == 1 else "anni"
-                    delta_text = f"\nTra: {years} {unit}"
+            # --- 3b. DISEGNO (DISPATCH SUL TIPO) ---
+            
+            if m_type == "event":
+                ev: Event = marker["data"]
+                
+                # ------- Etichetta centrata (logica originale) -------
+                title_text = (ev.titolo or "").upper()
+                delta_text = ""
+                if ev.dt > now:
+                    mleft = months_until(now, ev.dt)
+                    if mleft >= 12:
+                        years = mleft // 12
+                        unit = "anno" if years == 1 else "anni"
+                        delta_text = f"\nTra: {years} {unit}"
+                    else:
+                        mdisp = max(1, mleft)
+                        unit = "mese" if mdisp == 1 else "mesi"
+                        delta_text = f"\nTra: {mdisp} {unit}"
+
+                label_text = f"{title_text}{delta_text}"
+                label = QGraphicsTextItem()
+                label.setDefaultTextColor(self.label_color)
+                label.setFont(title_font)
+                label.setPlainText(label_text)
+
+                padx = max(8, int(vw * 0.006))
+                pady = max(6, int(vh * 0.008))
+
+                natural_w = label.boundingRect().width()
+                max_content_w = max_label_w - 2 * padx
+                content_w = min(natural_w, max_content_w)
+                label.setTextWidth(content_w)
+
+                opt = label.document().defaultTextOption()
+                opt.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+                opt.setWrapMode(QTextOption.WrapMode.WordWrap)
+                label.document().setDefaultTextOption(opt)
+                label.document().setDocumentMargin(0)
+
+                br = label.boundingRect()
+                bw = min(max_label_w, br.width() + 2 * padx)
+                bh = br.height() + 2 * pady
+                bx = max(float(safe_pad), min(float(vw - bw - safe_pad), x - bw / 2))
+
+                gap_above = int(label_gap * (1.6 if alt_toggle["above"] else 1.0))
+                gap_below = int(label_gap * (1.6 if alt_toggle["below"] else 1.0))
+                above_rect = QRectF(bx, y0 - gap_above - bh, bw, bh)
+                below_rect = QRectF(bx, y0 + gap_below,   bw, bh)
+
+                is_dep = bool(getattr(ev, 'is_dependent', False))
+                forced_side = "below" if is_dep else "above"
+                preferred_side = forced_side
+                
+                candidates = {"above": above_rect, "below": below_rect}
+                side = preferred_side
+
+                bubble_rect = candidates[side]
+                bubble_rect = QRectF(
+                    bubble_rect.x(),
+                    max(float(safe_pad), min(float(vh - bh - safe_pad), bubble_rect.y())),
+                    bubble_rect.width(),
+                    bubble_rect.height(),
+                )
+
+                bubble_rect = self._resolve_label_overlap(
+                    rect=bubble_rect,
+                    others=last_label_rects[side],
+                    x_min=float(safe_pad),
+                    x_max=float(vw - safe_pad - bubble_rect.width()),
+                    preferred_center=float(x),
+                )
+                
+                alt_toggle[side] = not alt_toggle[side]
+
+                # Marker icona/cerchio
+                marker_top = max(safe_pad, min(vh - safe_pad - icon_size, y0 - icon_size / 2))
+                if not self._try_draw_icon(x, marker_top, ev, icon_size, is_future=(ev.dt > now)):
+                    self._draw_circle(x, marker_top, ev, icon_size, is_future=(ev.dt > now))
+
+                last_label_rects[side].append(bubble_rect)
+
+                # Bubble
+                col = self._color_for_event(ev)
+                bubble = BubbleItem(bubble_rect, radius=10.0, bg_color=col, alpha=BUBBLE_BG_ALPHA)
+                self.scene.addItem(bubble)
+
+                # Testo
+                label.setPos(bubble_rect.x() + padx, bubble_rect.y() + pady)
+                label.setZValue(1.0)
+                label.setToolTip(f"{ev.titolo}\n{ev.categoria}\n{ev.dt:%Y-%m-%d}")
+                self.scene.addItem(label)
+
+                # Connettore
+                pen_conn = QPen(QColor("#9aa4ae"), 1)
+                if side == "above":
+                    y1, y2 = bubble_rect.y() + bubble_rect.height(), y0
                 else:
-                    mdisp = max(1, mleft)
-                    unit = "mese" if mdisp == 1 else "mesi"
-                    delta_text = f"\nTra: {mdisp} {unit}"
+                    y1, y2 = y0, bubble_rect.y()
+                vline = QGraphicsLineItem(x, y1, x, y2)
+                vline.setPen(pen_conn)
+                vline.setZValue(0.2)
+                self.scene.addItem(vline)
 
-            label_text = f"{title_text}{delta_text}"
-            label = QGraphicsTextItem()
-            label.setDefaultTextColor(self.label_color)
-            label.setFont(title_font)
-            label.setPlainText(label_text)
+                # Data opposta
+                date_side = "below" if side == "above" else "above"
+                self._draw_date_opposite_clamped(
+                    x=x, y_axis=y0, d=ev.dt, font=date_font,
+                    side=date_side, gap=date_gap,
+                    vw=vw, vh=vh, safe_pad=safe_pad
+                )
+            
+            elif m_type == "today":
+                # Disegna "OGGI"
+                dot = QGraphicsEllipseItem(x - r, y0 - r, 2 * r, 2 * r)
+                pen = QPen(TODAY_COLOR, max(2, int(vh * 0.005)))
+                dot.setPen(pen)
+                dot.setBrush(QBrush(TODAY_COLOR))
+                dot.setZValue(2.2) # Sopra gli altri pallini
+                dot.setToolTip(f"Oggi: {dt:%Y-%m-%d}")
+                self.scene.addItem(dot)
 
-            padx = max(8, int(vw * 0.006))
-            pady = max(6, int(vh * 0.008))
+                oggi_txt = QGraphicsTextItem("OGGI")
+                oggi_txt.setDefaultTextColor(QColor("#6b7280"))
+                oggi_txt.setFont(oggi_font)
+                rct = oggi_txt.boundingRect()
+                txt_x = max(safe_pad, min(vw - rct.width() - safe_pad, x - rct.width() / 2))
+                txt_y = y0 + date_gap + 18
+                txt_y = max(safe_pad, min(vh - rct.height() - safe_pad, txt_y))
+                oggi_txt.setPos(txt_x, txt_y)
+                oggi_txt.setZValue(0.3)
+                self.scene.addItem(oggi_txt)
 
-            natural_w = label.boundingRect().width()
-            max_content_w = max_label_w - 2 * padx
-            content_w = min(natural_w, max_content_w)
-            label.setTextWidth(content_w)
+            elif m_type == "birth":
+                # Disegna "NASCITA"
+                dot_b = QGraphicsEllipseItem(x - r, y0 - r, 2 * r, 2 * r)
+                pen_b = QPen(BIRTH_COLOR, max(2, int(vh * 0.005)))
+                dot_b.setPen(pen_b)
+                dot_b.setBrush(QBrush(BIRTH_COLOR))
+                dot_b.setZValue(2.0)
+                dot_b.setToolTip(f"Nascita: {dt:%Y-%m-%d}")
+                self.scene.addItem(dot_b)
+                
+                txt_b = QGraphicsTextItem("NASCITA")
+                txt_b.setDefaultTextColor(QColor("#6b7280"))
+                txt_b.setFont(oggi_font)
+                rct_b = txt_b.boundingRect()
+                txt_bx = max(safe_pad, min(vw - rct_b.width() - safe_pad, x - rct_b.width() / 2))
+                txt_by = y0 + date_gap + 18
+                txt_by = max(safe_pad, min(vh - rct_b.height() - safe_pad, txt_by))
+                txt_b.setPos(txt_bx, txt_by)
+                txt_b.setZValue(0.3)
+                self.scene.addItem(txt_b)
 
-            opt = label.document().defaultTextOption()
-            opt.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-            opt.setWrapMode(QTextOption.WrapMode.WordWrap)
-            label.document().setDefaultTextOption(opt)
-            label.document().setDocumentMargin(0)
+            elif m_type == "expectancy":
+                # Disegna "ASPETTATIVA"
+                dot = QGraphicsEllipseItem(x - r, y0 - r, 2 * r, 2 * r)
+                pen = QPen(EXPECTANCY_COLOR, max(2, int(vh * 0.005)))
+                dot.setPen(pen)
+                dot.setBrush(QBrush(EXPECTANCY_COLOR))
+                dot.setZValue(2.0)
+                dot.setToolTip(f"Aspettativa: {dt:%Y-%m-%d}")
+                self.scene.addItem(dot)
+                
+                txt = QGraphicsTextItem("ASPETTATIVA:\n" + dt.strftime("%Y"))
+                txt.setDefaultTextColor(QColor("#6b7280"))
+                txt.setFont(oggi_font)
+                rct = txt.boundingRect()
+                txt_x = max(safe_pad, min(vw - rct.width() - safe_pad, x - rct.width() / 2))
+                txt_y = y0 + date_gap + 18
+                txt_y = max(safe_pad, min(vh - rct.height() - safe_pad, txt_y))
+                txt.setPos(txt_x, txt_y)
+                txt.setZValue(0.3)
+                self.scene.addItem(txt)
 
-            br = label.boundingRect()
+        # =====================================================================
+        # Fine della logica di spaziatura unificata
+        # =====================================================================
 
-            bw = min(max_label_w, br.width() + 2 * padx)
-            bh = br.height() + 2 * pady
-
-            bx = max(float(safe_pad), min(float(vw - bw - safe_pad), x - bw / 2))
-
-            # Alterna la distanza verticale etichetta ↔ pallino per ridurre collisioni
-            gap_above = int(label_gap * (1.6 if alt_toggle["above"] else 1.0))
-            gap_below = int(label_gap * (1.6 if alt_toggle["below"] else 1.0))
-            above_rect = QRectF(bx, y0 - gap_above - bh, bw, bh)
-            below_rect = QRectF(bx, y0 + gap_below,   bw, bh)
-
-            # Impone lato: capofamiglia sopra (is_dependent False), familiari a carico sotto
-            is_dep = bool(getattr(ev, 'is_dependent', False))
-            forced_side = "below" if is_dep else "above"
-            preferred_side = forced_side
-            alternate_side = forced_side  # nessuna alternanza
-
-            def _has_overlap(rect: QRectF, items: List[QRectF]) -> bool:
-                return any(rect.intersects(other) for other in items)
-
-            candidates = {"above": above_rect, "below": below_rect}
-            side = preferred_side
-
-            bubble_rect = candidates[side]
-            bubble_rect = QRectF(
-                bubble_rect.x(),
-                max(float(safe_pad), min(float(vh - bh - safe_pad), bubble_rect.y())),
-                bubble_rect.width(),
-                bubble_rect.height(),
-            )
-
-            bubble_rect = self._resolve_label_overlap(
-                rect=bubble_rect,
-                others=last_label_rects[side],
-                x_min=float(safe_pad),
-                x_max=float(vw - safe_pad - bubble_rect.width()),
-                preferred_center=float(x),
-            )
-
-            # X finale deciso: aggiorna il riferimento e disegna il marker
-            last_dot_x = x
-            if ev.dt <= now:
-                prev_ev_x = x
-            elif next_ev_x is None:
-                next_ev_x = x
-
-            # Toggle alternanza per il lato usato
-            alt_toggle[side] = not alt_toggle[side]
-
-            # Marker icona/cerchio dopo aver fissato X
-            marker_top = max(safe_pad, min(vh - safe_pad - icon_size, y0 - icon_size / 2))
-            if not self._try_draw_icon(x, marker_top, ev, icon_size, is_future=(ev.dt > now)):
-                self._draw_circle(x, marker_top, ev, icon_size, is_future=(ev.dt > now))
-
-            last_label_rects[side].append(bubble_rect)
-
-            # Bubble
-            col = self._color_for_event(ev)
-            bubble = BubbleItem(bubble_rect, radius=10.0, bg_color=col, alpha=BUBBLE_BG_ALPHA)
-            self.scene.addItem(bubble)
-
-            # Testo
-            label.setPos(bubble_rect.x() + padx, bubble_rect.y() + pady)
-            label.setZValue(1.0)
-            label.setToolTip(f"{ev.titolo}\n{ev.categoria}\n{ev.dt:%Y-%m-%d}")
-            self.scene.addItem(label)
-
-            # Connettore
-            pen_conn = QPen(QColor("#9aa4ae"), 1)
-            if side == "above":
-                y1, y2 = bubble_rect.y() + bubble_rect.height(), y0
-            else:
-                y1, y2 = y0, bubble_rect.y()
-            vline = QGraphicsLineItem(x, y1, x, y2)
-            vline.setPen(pen_conn)
-            vline.setZValue(0.2)
-            self.scene.addItem(vline)
-
-            # Data opposta, clampata ai bordi
-            date_side = "below" if side == "above" else "above"
-            self._draw_date_opposite_clamped(
-                x=x, y_axis=y0, d=ev.dt, font=date_font,
-                side=date_side, gap=date_gap,
-                vw=vw, vh=vh, safe_pad=safe_pad
-            )
-
-        # Riposiziona il marker "OGGI" per rispettare distanza minima SU ENTRAMBI I LATI
-        # Usa le posizioni finali dei pallini (prev_ev_x/next_ev_x) così funziona
-        # anche quando si filtra solo passato o solo futuro.
-        if today_dot_item is not None and today_x is not None and today_r is not None:
-            dot_spacing = max(float(MIN_DOT_SPACING_PX), float(int(max_label_w * 0.55)))
-            left_bound = float(safe_pad) + today_r
-            if prev_ev_x is not None:
-                left_bound = max(left_bound, prev_ev_x + dot_spacing)
-            right_bound = float(vw - safe_pad) - today_r
-            if next_ev_x is not None:
-                right_bound = min(right_bound, next_ev_x - dot_spacing)
-            new_x = today_x
-            if left_bound > right_bound:
-                # spazio insufficiente: scegli il più vicino al valore originale
-                if abs(new_x - left_bound) <= abs(new_x - right_bound):
-                    new_x = left_bound
-                else:
-                    new_x = right_bound
-            else:
-                if new_x < left_bound:
-                    new_x = left_bound
-                elif new_x > right_bound:
-                    new_x = right_bound
-            if abs(new_x - today_x) > 0.1:
-                rect = today_dot_item.rect()
-                rect.moveLeft(new_x - today_r)
-                today_dot_item.setRect(rect)
-                if today_txt_item is not None:
-                    rct = today_txt_item.boundingRect()
-                    txt_x = max(float(safe_pad), min(float(vw - rct.width() - safe_pad), new_x - rct.width() / 2))
-                    txt_y = y0 + date_gap + 18
-                    txt_y = max(float(safe_pad), min(float(vh - rct.height() - safe_pad), txt_y))
-                    today_txt_item.setPos(txt_x, txt_y)
-                today_x = new_x
-
-        # Riposiziona il marker "ASPETTATIVA" per rispettare la distanza minima
-        if exp_dot_item is not None and exp_x is not None and exp_r is not None:
-            dot_spacing = max(float(MIN_DOT_SPACING_PX), float(int(max_label_w * 0.55)))
-            left_bound = float(safe_pad) + exp_r
-            if last_dot_x is not None:
-                left_bound = max(left_bound, last_dot_x + dot_spacing)
-            if today_x is not None and today_x <= exp_x:
-                left_bound = max(left_bound, today_x + dot_spacing)
-            right_bound = float(vw - safe_pad) - exp_r
-            new_x = exp_x
-            if left_bound > right_bound:
-                new_x = right_bound
-            else:
-                if new_x < left_bound:
-                    new_x = left_bound
-            if abs(new_x - exp_x) > 0.1:
-                rect = exp_dot_item.rect()
-                rect.moveLeft(new_x - exp_r)
-                exp_dot_item.setRect(rect)
-                if exp_txt_item is not None:
-                    rct = exp_txt_item.boundingRect()
-                    txt_x = max(float(safe_pad), min(float(vw - rct.width() - safe_pad), new_x - rct.width() / 2))
-                    txt_y = y0 + date_gap + 18
-                    txt_y = max(float(safe_pad), min(float(vh - rct.height() - safe_pad), txt_y))
-                    exp_txt_item.setPos(txt_x, txt_y)
-                exp_x = new_x
         # NIENTE fitInView: lasciamo la scena 1:1 con la viewport
         # self.fitInView(...)
         # Mostra/abilita il pulsante PDF se c'è contenuto
         if hasattr(self, "_pdf_btn"):
-            self._pdf_btn.setEnabled(bool(self.events))
-            if bool(self.events):
+            # Usiamo 'all_markers' che include anche "Oggi", ecc.
+            has_content = bool(all_markers)
+            self._pdf_btn.setEnabled(has_content)
+            if has_content:
                 self._pdf_btn.show()
             else:
                 self._pdf_btn.hide()
@@ -843,12 +794,12 @@ class TimelineCanvas(QGraphicsView):
     def _make_font(self, size: int, prefer: List[str]) -> QFont:
         """Crea un QFont scegliendo il peso migliore disponibile secondo l’ordine preferito."""
         weight_map = {
-            "Light":    QFont.Weight.Light,
-            "Normal":   QFont.Weight.Normal,
-            "Medium":   QFont.Weight.Medium,
+            "Light":   QFont.Weight.Light,
+            "Normal":  QFont.Weight.Normal,
+            "Medium":  QFont.Weight.Medium,
             "DemiBold": QFont.Weight.DemiBold,
-            "Bold":     QFont.Weight.Bold,
-            "Black":    QFont.Weight.Black,
+            "Bold":   QFont.Weight.Bold,
+            "Black":   QFont.Weight.Black,
         }
         chosen = None
         for w in prefer:
@@ -869,9 +820,3 @@ class TimelineCanvas(QGraphicsView):
             if c:
                 return QColor(c)
         return color_for(ev.categoria)
-
-
-
-
-
-
