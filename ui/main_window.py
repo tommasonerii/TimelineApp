@@ -437,6 +437,7 @@ class MainWindow(QMainWindow):
             filtered = []
 
         # Timeline
+        self.canvas.set_time_filters(show_past, show_future)
         self.canvas.set_events(filtered)
         # Imposta marker aspettativa di vita se disponibile per la persona
         birth_dt = None

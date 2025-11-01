@@ -128,6 +128,8 @@ class TimelineCanvas(QGraphicsView):
         self.birth_dt: Optional[datetime] = None
         self.dep_color_map: Dict[str, QColor] = {}
         self.current_person: Optional[str] = None
+        self.show_past: bool = True
+        self.show_future: bool = True
         # Tabelle di aspettativa di vita (iniettate dall'esterno)
         self.mappa_maschi: Dict[int, int] = {}
         self.mappa_femmine: Dict[int, int] = {}
@@ -189,6 +191,13 @@ class TimelineCanvas(QGraphicsView):
                 self.dep_color_map[fam] = palette[idx % len(palette)]
                 idx += 1
         self._redraw_and_fit()
+
+    def set_time_filters(self, show_past: bool, show_future: bool) -> None:
+        changed = (self.show_past != show_past) or (self.show_future != show_future)
+        self.show_past = show_past
+        self.show_future = show_future
+        if changed and self.events:
+            self._redraw_and_fit()
 
     def set_expectancy_tables(self, mappa_maschi: Dict[int, int], mappa_femmine: Dict[int, int]) -> None:
         """Inietta le tabelle di aspettativa di vita (anni rimanenti per età)."""
@@ -299,11 +308,13 @@ class TimelineCanvas(QGraphicsView):
         # Range temporale con padding simmetrico (considera anche aspettativa se presente)
         # Include sempre "oggi" per garantire che il marker sia visibile.
         dates_for_range = [e.dt for e in self.events]
+        show_past = self.show_past
+        show_future = self.show_future
         now = datetime.now() # 'now' definito qui
         dates_for_range.append(now)
-        if self.expectancy_dt is not None:
+        if show_future and self.expectancy_dt is not None:
             dates_for_range.append(self.expectancy_dt)
-        if self.birth_dt is not None:
+        if show_past and self.birth_dt is not None:
             dates_for_range.append(self.birth_dt)
         dt_min = min(dates_for_range)
         dt_max = max(dates_for_range)
@@ -359,18 +370,20 @@ class TimelineCanvas(QGraphicsView):
             all_markers.append({"dt": now, "type": "today", "data": None})
 
         # Aggiungi "NASCITA"
-        if self.birth_dt is not None and dt_min_pad <= self.birth_dt <= dt_max_pad:
+        if show_past and self.birth_dt is not None and dt_min_pad <= self.birth_dt <= dt_max_pad:
             all_markers.append({"dt": self.birth_dt, "type": "birth", "data": None})
 
         # Aggiungi "ASPETTATIVA"
-        if self.expectancy_dt is not None and dt_min_pad <= self.expectancy_dt <= dt_max_pad:
+        if show_future and self.expectancy_dt is not None and dt_min_pad <= self.expectancy_dt <= dt_max_pad:
             all_markers.append({"dt": self.expectancy_dt, "type": "expectancy", "data": None})
-        
+
         # --- 2. ORDINA I MARKER PER DATA ---
         all_markers.sort(key=lambda m: m["dt"])
 
         # --- 3. LOOP UNICO: SPAZIATURA E DISEGNO ---
         dot_spacing = max(float(MIN_DOT_SPACING_PX), float(int(max_label_w * 0.55)))
+
+        first_marker_x: Optional[float] = None
 
         for marker in all_markers:
             dt = marker["dt"]
@@ -389,11 +402,20 @@ class TimelineCanvas(QGraphicsView):
             max_x = float(vw - safe_pad) - r
             x = max(min_x, min(max_x, x_nom))
 
+            is_first_marker = (first_marker_x is None)
+            if is_first_marker:
+                base_size = icon_size if m_type == "event" else today_size
+                shift = min(r * 0.8, max(4.0, base_size * 0.22))
+                min_first_x = float(safe_pad) + max(2.0, r * 0.35)
+                x = max(min_first_x, x - shift)
+
             # Applica la spaziatura minima rispetto all'ultimo pallino posizionato
             if last_dot_x is not None and x < last_dot_x + dot_spacing:
                 x = min(max_x, last_dot_x + dot_spacing)
-            
+
             last_dot_x = x  # Aggiorna la posizione dell'ultimo pallino
+            if first_marker_x is None:
+                first_marker_x = x
 
             # --- 3b. DISEGNO (DISPATCH SUL TIPO) ---
             
@@ -459,8 +481,8 @@ class TimelineCanvas(QGraphicsView):
                 bh = br.height() + 2 * pady
                 bx = max(float(safe_pad), min(float(vw - bw - safe_pad), x - bw / 2))
 
-                gap_above = int(label_gap * (2.2 if alt_toggle["above"] else 1.0))
-                gap_below = int(label_gap * (2.2 if alt_toggle["below"] else 1.0))
+                gap_above = int(label_gap * (2.0 if alt_toggle["above"] else 1.0))
+                gap_below = int(label_gap * (2.0 if alt_toggle["below"] else 1.0))
                 above_rect = QRectF(bx, y0 - gap_above - bh, bw, bh)
                 below_rect = QRectF(bx, y0 + gap_below,   bw, bh)
 
@@ -596,6 +618,9 @@ class TimelineCanvas(QGraphicsView):
         # =====================================================================
         # Fine della logica di spaziatura unificata
         # =====================================================================
+
+        if first_marker_x is not None:
+            axis.setLine(first_marker_x, y0, axis_x2, y0)
 
         # NIENTE fitInView: lasciamo la scena 1:1 con la viewport
         # self.fitInView(...)
