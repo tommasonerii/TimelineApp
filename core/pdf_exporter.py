@@ -4,7 +4,7 @@ from datetime import date
 from typing import Callable, List, Optional, Sequence
 
 from PyQt6.QtCore import Qt, QRectF
-from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from PyQt6.QtGui import QBrush, QColor, QFont, QPainter, QPen, QPageLayout
 from PyQt6.QtPrintSupport import QPrinter
 from PyQt6.QtWidgets import QGraphicsScene
 
@@ -79,18 +79,20 @@ def paint_timeline_to_printer(
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
 
         layout = printer.pageLayout()
-        paint_rect = layout.paintRectPixels(printer.resolution())
-        target = QRectF(paint_rect)
+        paint_rect_px = layout.paintRectPixels(printer.resolution())
+        paint_rect_pt = layout.paintRect(QPageLayout.Unit.Point)
+        target = QRectF(paint_rect_px)
         source = QRectF(scene.sceneRect())
 
-        page_height = max(1.0, float(target.height()))
+        page_height_px = max(1.0, float(target.height()))
+        page_height_pt = max(1.0, float(paint_rect_pt.height()))
         today_display = date.today().strftime("%d/%m/%Y")
         person_display = (current_person or "").strip()
         title_text = f"Timeline {person_display}" if person_display else "Timeline"
 
-        title_font_size = max(18, int(page_height * 0.038))
-        date_font_size = max(12, int(page_height * 0.024))
-        legend_font_size = max(10, int(page_height * 0.02))
+        title_font_size = max(16, int(page_height_pt * 0.035))
+        date_font_size = max(11, int(page_height_pt * 0.022))
+        legend_font_size = max(9, int(page_height_pt * 0.018))
 
         title_font = make_font(title_font_size, ["Bold", "Black", "DemiBold"])
         date_font = make_font(date_font_size, ["Medium", "Normal"])
@@ -99,10 +101,10 @@ def paint_timeline_to_printer(
         text_pen = QPen(label_color)
         painter.setPen(text_pen)
 
-        top_padding = max(20.0, page_height * 0.035)
-        between_title_date = max(8.0, page_height * 0.01)
-        after_header_gap = max(18.0, page_height * 0.025)
-        legend_gap = max(20.0, page_height * 0.03)
+        top_padding = max(24.0, page_height_px * 0.025)
+        between_title_date = max(6.0, page_height_px * 0.008)
+        after_header_gap = max(16.0, page_height_px * 0.018)
+        legend_gap = max(20.0, page_height_px * 0.025)
 
         current_y = target.top() + top_padding
 
@@ -131,8 +133,8 @@ def paint_timeline_to_printer(
             legend_entries.append(cat)
 
         legend_height = 0.0
-        legend_line_spacing = max(6.0, page_height * 0.01)
-        swatch_size = max(14.0, page_height * 0.02)
+        legend_line_spacing = max(6.0, page_height_px * 0.01)
+        swatch_size = max(12.0, page_height_px * 0.016)
 
         if legend_entries:
             painter.setFont(make_font(max(legend_font_size, int(legend_font_size * 1.1)), ["Bold", "DemiBold", "Medium"]))
