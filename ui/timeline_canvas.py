@@ -51,7 +51,6 @@ DATE_VH_SCALE  = 0.020
 
 # Margini
 SIDE_PAD_RATIO = 0.03  # padding per asse in X (oltre al safe_pad)
-AXIS_LEFT_SHIFT_RATIO = 0.015  # riduci il padding sinistro dell'asse
 
 # Gap verticali rispetto all’asse
 LABEL_GAP_VH_RATIO = 0.170  # pallino <-> ETICHETTA
@@ -280,8 +279,6 @@ class TimelineCanvas(QGraphicsView):
 
         # Metriche
         pad_x  = int(vw * SIDE_PAD_RATIO)
-        axis_left_shift = int(vw * AXIS_LEFT_SHIFT_RATIO)
-        axis_pad_left = max(0, pad_x - axis_left_shift)
         axis_thick = max(2, int(vh * 0.008))
         icon_size  = max(12, int(vh * 0.055))
         today_size = max(8,  int(vh * 0.030))
@@ -301,7 +298,7 @@ class TimelineCanvas(QGraphicsView):
 
         # Asse
         y0 = vh / 2
-        axis_x1 = safe_pad + axis_pad_left
+        axis_x1 = safe_pad + pad_x
         axis_x2 = vw - (safe_pad + pad_x)
         axis_pen = QPen(self.axis_color, axis_thick, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
         axis = QGraphicsLineItem(axis_x1, y0, axis_x2, y0)
@@ -326,7 +323,7 @@ class TimelineCanvas(QGraphicsView):
             dt_max = dt_min + timedelta(days=1)
         base_range_days = max((dt_max - dt_min).days, 1)
         pad_days = max(int(base_range_days * 0.10), 15)
-        dt_min_pad = dt_min - timedelta(days=pad_days)
+        dt_min_pad = dt_min
         dt_max_pad = dt_max + timedelta(days=pad_days)
         total_sec = (dt_max_pad - dt_min_pad).total_seconds()
 
@@ -387,12 +384,10 @@ class TimelineCanvas(QGraphicsView):
         # --- 3. LOOP UNICO: SPAZIATURA E DISEGNO ---
         dot_spacing = max(float(MIN_DOT_SPACING_PX), float(int(max_label_w * 0.55)))
 
-        first_marker_x: Optional[float] = None
-
         for marker in all_markers:
             dt = marker["dt"]
             m_type = marker["type"]
-            
+
             # --- 3a. LOGICA DI SPAZIATURA UNIFICATA ---
             x_nom = x_from_dt(dt)
             
@@ -403,23 +398,14 @@ class TimelineCanvas(QGraphicsView):
                 r = today_size / 2  # Nascita, Oggi, Aspettativa
             
             min_x = float(safe_pad) + r
-            max_x = float(vw - safe_pad) - r
+            max_x = min(float(vw - safe_pad) - r, float(axis_x2))
             x = max(min_x, min(max_x, x_nom))
-
-            is_first_marker = (first_marker_x is None)
-            if is_first_marker:
-                base_size = icon_size if m_type == "event" else today_size
-                shift = min(r * 0.8, max(4.0, base_size * 0.22))
-                min_first_x = float(safe_pad) + max(2.0, r * 0.35)
-                x = max(min_first_x, x - shift)
 
             # Applica la spaziatura minima rispetto all'ultimo pallino posizionato
             if last_dot_x is not None and x < last_dot_x + dot_spacing:
                 x = min(max_x, last_dot_x + dot_spacing)
 
             last_dot_x = x  # Aggiorna la posizione dell'ultimo pallino
-            if first_marker_x is None:
-                first_marker_x = x
 
             # --- 3b. DISEGNO (DISPATCH SUL TIPO) ---
             
@@ -622,9 +608,6 @@ class TimelineCanvas(QGraphicsView):
         # =====================================================================
         # Fine della logica di spaziatura unificata
         # =====================================================================
-
-        if first_marker_x is not None:
-            axis.setLine(first_marker_x, y0, axis_x2, y0)
 
         # NIENTE fitInView: lasciamo la scena 1:1 con la viewport
         # self.fitInView(...)
