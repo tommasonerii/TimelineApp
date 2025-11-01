@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtPrintSupport import QPrinter
 
 from core.models import Event
+from core.pdf_exporter import default_pdf_filename, paint_timeline_to_printer
 
 # ===========================
 #  PALETTE & COSTANTI
@@ -787,7 +788,7 @@ class TimelineCanvas(QGraphicsView):
         if quick:
             dl = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
             # Preferisci nome persona nel filename
-            filename = self._default_pdf_filename()
+            filename = default_pdf_filename(self.current_person)
             path = (dl.rstrip('/\\') + '/' + filename) if dl else filename
             self.export_pdf(path)
         else:
@@ -809,7 +810,7 @@ class TimelineCanvas(QGraphicsView):
         if not path:
             # Proponi cartella Download con nome file basato sulla persona
             dl = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.DownloadLocation)
-            filename = self._default_pdf_filename()
+            filename = default_pdf_filename(self.current_person)
             initial = filename
             if dl:
                 initial = (dl.rstrip('/\\') + '/' + filename)
@@ -820,49 +821,15 @@ class TimelineCanvas(QGraphicsView):
         if not str(path).lower().endswith('.pdf'):
             path = str(path) + '.pdf'
         printer.setOutputFileName(path)
-        self._paint_to_printer(printer)
-
-    def _default_pdf_filename(self) -> str:
-        """Costruisce il nome file predefinito per l'export PDF.
-        Formato richiesto: timeline_nome_cognome.pdf (senza timestamp).
-        In assenza del nome persona, ricade su timeline.pdf.
-        """
-        person = (self.current_person or "").strip()
-        if not person:
-            base = "timeline"
-        else:
-            try:
-                import unicodedata
-                norm = unicodedata.normalize('NFKD', person)
-                ascii_only = ''.join(ch for ch in norm if not unicodedata.combining(ch))
-            except Exception:
-                ascii_only = person
-            slug = ''.join(ch if ch.isalnum() or ch in (' ', '-', '_') else ' ' for ch in ascii_only)
-            slug = '_'.join(part for part in slug.strip().split())
-            slug = slug.lower()
-            base = f"timeline_{slug}" if slug else "timeline"
-        return f"{base}.pdf"
-
-    def _paint_to_printer(self, printer: QPrinter) -> None:
-        painter = QPainter(printer)
-        try:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setRenderHint(QPainter.RenderHint.TextAntialiasing, True)
-            # Area stampabile in pixel alla risoluzione della stampante
-            layout = printer.pageLayout()
-            pr = layout.paintRectPixels(printer.resolution())
-            target = QRectF(pr)
-            source = QRectF(self.scene.sceneRect())
-
-            # Disegna la scena adattandola all'area stampabile mantenendo le proporzioni
-            self.scene.render(
-                painter,
-                target,
-                source,
-                Qt.AspectRatioMode.KeepAspectRatio,
-            )
-        finally:
-            painter.end()
+        paint_timeline_to_printer(
+            scene=self.scene,
+            events=self.events,
+            printer=printer,
+            current_person=self.current_person,
+            label_color=self.label_color,
+            make_font=self._make_font,
+            category_color_fn=color_for,
+        )
 
     # ---------- Font helpers ----------
 
