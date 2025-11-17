@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import List, Tuple, Optional, Dict
 import pandas as pd
 from .models import Event, PersonInfo
@@ -52,37 +53,79 @@ def _map_columns(df: pd.DataFrame) -> Tuple[str, List[str], List[str], Optional[
         )
     return subm_col, eventi_cols, eventi_dep_cols, nome_col, cognome_col, dati_pers_col
 
+
 def load_events_csv(path: str) -> Tuple[List[Event], dict]:
     df = pd.read_csv(path, encoding="utf-8-sig", dtype=str, keep_default_na=False)
     subm_col, eventi_cols, eventi_dep_cols, nome_col, cognome_col, dati_pers_col = _map_columns(df)
 
-    events: List[Event] = []
-    people: dict = {}
-    for _, row in df.iterrows():
-        # Deriva il nome completo
+    def _parse_submission(value: object) -> datetime:
+        raw = str(value or "").strip()
+        if not raw:
+            return datetime.min
+        parsed = pd.to_datetime(raw, dayfirst=True, utc=False, errors="coerce")
+        if pd.isna(parsed):
+            parsed = pd.to_datetime(raw, dayfirst=False, utc=False, errors="coerce")
+        if pd.isna(parsed):
+            return datetime.min
+        if isinstance(parsed, pd.Timestamp):
+            if parsed.tzinfo is not None:
+                parsed = parsed.tz_convert(None)
+            return parsed.to_pydatetime()
+        if isinstance(parsed, datetime):
+            return parsed
+        return datetime.min
+
+    def _extract_person(row: pd.Series) -> Tuple[str, Optional[PersonInfo]]:
         full_name = ""
+        info: Optional[PersonInfo] = None
         if dati_pers_col:
             details = parse_personal_details(row.get(dati_pers_col, ""))
-            nome = details.get("nome", "")
-            cognome = details.get("cognome", "")
+            nome = (details.get("nome", "") or "").strip()
+            cognome = (details.get("cognome", "") or "").strip()
             full_name = f"{nome} {cognome}".strip()
             sesso = (details.get("sesso", "") or "").strip()
             nascita_str = (details.get("nascita_str", "") or "").strip()
             nascita_dt = parse_date(nascita_str) if nascita_str else None
-            if full_name and full_name not in people:
-                people[full_name] = PersonInfo(nome=nome, cognome=cognome, sesso=sesso, nascita=nascita_dt)
-        elif nome_col:
-            nome = str(row.get(nome_col, "")).strip()
-            if cognome_col:
-                cognome = str(row.get(cognome_col, "")).strip()
-                full_name = f"{nome} {cognome}".strip()
-            else:
-                full_name = nome
-            if full_name and full_name not in people:
-                people[full_name] = PersonInfo(nome=nome or full_name, cognome=cognome if cognome_col else "", sesso="", nascita=None)
+            if full_name:
+                info = PersonInfo(
+                    nome=nome or full_name,
+                    cognome=cognome,
+                    sesso=sesso,
+                    nascita=nascita_dt,
+                )
+        if not full_name and nome_col:
+            nome = (str(row.get(nome_col, "")) or "").strip()
+            cognome = (str(row.get(cognome_col, "")) or "").strip() if cognome_col else ""
+            full_name = f"{nome} {cognome}".strip() if cognome_col else nome
+            if full_name:
+                info = PersonInfo(
+                    nome=nome or full_name,
+                    cognome=cognome if cognome_col else "",
+                    sesso="",
+                    nascita=None,
+                )
+        return full_name, info
 
+    selected_forms: Dict[str, Dict[str, object]] = {}
+    for _, row in df.iterrows():
+        full_name, info = _extract_person(row)
         if not full_name:
             continue
+        submission_dt = _parse_submission(row.get(subm_col))
+        existing = selected_forms.get(full_name)
+        if existing is None or submission_dt >= existing["submission"]:
+            selected_forms[full_name] = {
+                "row": row.copy(),
+                "submission": submission_dt,
+                "info": info,
+            }
+
+    events: List[Event] = []
+    people: Dict[str, PersonInfo] = {}
+    for full_name, payload in selected_forms.items():
+        row = payload["row"]
+        info = payload.get("info") or PersonInfo(nome=full_name, cognome="", sesso="", nascita=None)
+        people[full_name] = info
 
         event_columns: List[Tuple[bool, str]] = []
         for col in eventi_cols:
