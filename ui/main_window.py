@@ -67,7 +67,7 @@ def make_content_card(widget: QWidget, radius: int = 16) -> QFrame:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Timeline App — Qt Canvas (no HTML)")
+        self.setWindowTitle("Timeline App")
         self.resize(1200, 980)
 
         # === Font Lato (se disponibile) ===
